@@ -2,14 +2,14 @@
 ROOT/main/reclaim_scanner.py
 
 Scans NIFTY50 stocks for VWAP reclaim setups
-Runs at XX:16:00 (16 min after hourly candle close)
+Runs at XX:01:00 (1 min after hourly candle close)
 Outputs: reclaim_watchlist.json
 """
 
 import sys
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import time
 import pytz
 
@@ -42,7 +42,7 @@ def load_instrument_tokens():
 def calculate_session_vwap(candles):
     """
     Calculate cumulative VWAP from session start
-    At XX:16, last candle (candles[-1]) is incomplete current hour
+    At XX:01, last candle (candles[-1]) is incomplete current hour
     Use candles[:-1] which are all completed candles up to previous hour
     Returns: vwap_value
     """
@@ -108,7 +108,27 @@ def check_reclaim(candle, vwap, vol_sma50):
 def scan_stocks():
     """
     Main scanner logic
+    Validates timing and candle freshness
     """
+    # Use current datetime with IST timezone
+    ist = pytz.timezone('Asia/Kolkata')
+    scan_date = datetime.now(ist)
+    current_time = scan_date.time()
+    
+    print(f"[SCAN] Running at {scan_date.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # VALIDATION 1: Check if within valid scanner hours
+    market_start = dt_time(9, 0)   # 9:00 AM
+    scanner_end = dt_time(15, 20)  # 3:20 PM (last valid scan at 3:01)
+    
+    if not (market_start <= current_time <= scanner_end):
+        print(f"\n{'!'*60}")
+        print(f"[WARNING] Scanner running outside valid hours")
+        print(f"[WARNING] Current time: {scan_date.strftime('%H:%M:%S')}")
+        print(f"[WARNING] Valid hours: 9:00 AM - 3:20 PM")
+        print(f"[WARNING] Results may include stale reclaims")
+        print(f"{'!'*60}\n")
+    
     # Check trend gate
     if not is_trading_enabled():
         print("[FILTER] Trend gate OFF - no scanning")
@@ -121,11 +141,6 @@ def scan_stocks():
     tokens = load_instrument_tokens()
     
     watchlist = {}
-    
-    # Use current datetime with IST timezone
-    ist = pytz.timezone('Asia/Kolkata')
-    scan_date = datetime.now(ist)
-    print(f"[SCAN] Running at {scan_date.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Fetch enough historical data for volume SMA50 (need ~60+ candles)
     from_date = scan_date - timedelta(days=20)
@@ -165,6 +180,14 @@ def scan_stocks():
             # Find the candle we're checking (second-to-last in today's candles)
             check_candle = today_candles[-2]
             
+            # VALIDATION 2: Check candle freshness (should be recent)
+            candle_age_minutes = (scan_date - check_candle['date']).total_seconds() / 60
+            
+            # Candle should be less than 90 minutes old (allows for some delay)
+            if candle_age_minutes > 90:
+                print(f"[SKIP] {symbol} - Candle too old ({candle_age_minutes:.0f} min ago at {check_candle['date'].strftime('%H:%M')})")
+                continue
+            
             # Find this candle's index in all_candles for volume SMA50
             check_candle_index = None
             for i, c in enumerate(all_candles):
@@ -186,9 +209,10 @@ def scan_stocks():
                     "reclaim_high": reclaim_high,
                     "reclaim_low": reclaim_low,
                     "timestamp": check_candle['date'].isoformat(),
-                    "vwap": vwap
+                    "vwap": vwap,
+                    "candle_age_minutes": round(candle_age_minutes, 1)
                 }
-                print(f"[RECLAIM] {symbol} @ {reclaim_high:.2f} (Low: {reclaim_low:.2f}, VWAP: {vwap:.2f})")
+                print(f"[RECLAIM] {symbol} @ {reclaim_high:.2f} (Low: {reclaim_low:.2f}, VWAP: {vwap:.2f}) - Candle: {check_candle['date'].strftime('%H:%M')}")
         
         except Exception as e:
             print(f"[ERROR] {symbol}: {e}")

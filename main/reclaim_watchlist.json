@@ -1,14 +1,1 @@
-{
-  "BAJAJFINSV": {
-    "reclaim_high": 2021.6,
-    "reclaim_low": 2005.4,
-    "timestamp": "2025-12-26T14:15:00+05:30",
-    "vwap": 2018.5882275346883
-  },
-  "MARUTI": {
-    "reclaim_high": 16616,
-    "reclaim_low": 16578,
-    "timestamp": "2025-12-26T14:15:00+05:30",
-    "vwap": 16600.519539443038
-  }
-}
+{}
