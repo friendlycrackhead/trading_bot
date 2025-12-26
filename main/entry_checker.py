@@ -3,7 +3,7 @@ ROOT/main/entry_checker.py
 
 Checks if watchlist stocks close above reclaim high
 Runs at XX:14:58 (2 sec before hourly candle close)
-First checks NIFTY LTP > SMA50, then checks stock LTP > reclaim high
+First checks NIFTY filter (previous candle close vs SMA50), then checks stock LTP > reclaim high
 Outputs: entry_signals.json
 """
 
@@ -37,7 +37,7 @@ def load_watchlist():
 
 def check_entries():
     """
-    STEP 1: Check NIFTY LTP > SMA50 (trend gate)
+    STEP 1: Check NIFTY filter (previous candle close > SMA50)
     STEP 2: If pass, check stock LTP > reclaim high
     Uses LTP (real-time price) at XX:14:58
     """
@@ -48,15 +48,15 @@ def check_entries():
     print(f"[ENTRY CHECK] Starting at {now.strftime('%H:%M:%S')}")
     print(f"{'='*60}\n")
     
-    # STEP 1: Check NIFTY trend gate FIRST
-    print(f"[STEP 1/2] Checking NIFTY Trend Gate (LTP vs SMA50)...")
+    # STEP 1: Check NIFTY filter FIRST
+    print(f"[STEP 1/2] Checking NIFTY Filter (Previous Candle Close vs SMA50)...")
     
     if not is_trading_enabled():
-        print("\n❌ [BLOCKED] NIFTY trend gate FAILED - No entries allowed")
+        print("\n❌ [BLOCKED] NIFTY filter FAILED - No entries allowed")
         print(f"{'='*60}\n")
         return {}
     
-    print("\n✅ [PASSED] NIFTY trend gate - Proceeding with stock checks\n")
+    print("\n✅ [PASSED] NIFTY filter - Proceeding with stock checks\n")
     
     # STEP 2: Check watchlist stocks
     print(f"[STEP 2/2] Checking Watchlist Stocks (LTP vs Reclaim High)...")

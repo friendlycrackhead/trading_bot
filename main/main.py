@@ -146,7 +146,7 @@ def main():
     print(f"\n{'▓'*60}")
     print(f"▓ INITIALIZATION @ {datetime.now().strftime('%H:%M:%S')}")
     print(f"{'▓'*60}\n")
-    print(f"[STARTUP] Initializing NIFTY SMA50 cache...")
+    print(f"[STARTUP] Initializing NIFTY filter...")
     update_sma_cache()
 
     # Find next scheduled events
@@ -205,7 +205,7 @@ def main():
                 print(f"{'▓'*60}\n")
                 
                 # Update SMA50 cache before scanner (hourly update)
-                print(f"[CACHE] Refreshing NIFTY SMA50 cache (hourly)...")
+                print(f"[CACHE] Refreshing NIFTY filter...")
                 update_sma_cache()
                 print()
                 
