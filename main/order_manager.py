@@ -1,9 +1,9 @@
 """
-ROOT/main/position_monitor.py
+ROOT/main/order_manager.py
 
-Monitors open CNC holdings for SL/TP triggers
-Runs every 1 second in main loop
-Places exit orders when SL or TP hit
+Unified order manager - handles ALL order placement (entry + exit)
+Entry: Called by main after entry_checker generates signals
+Exit: Called by position_monitor when SL/TP hit
 """
 
 import sys
@@ -16,167 +16,333 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
-from risk_manager import log_trade_exit
+from risk_manager import can_open_new_trades, log_trade_exit
 
 
 # ============ CONFIG ============
-POSITIONS_CACHE = ROOT / "main" / "open_positions.json"
+SIGNALS_INPUT = ROOT / "main" / "entry_signals.json"
+EXECUTION_LOG = ROOT / "logs" / "orders" / "execution_log.json"
+POSITIONS_FILE = ROOT / "main" / "open_positions.json"
+
+RISK_PERCENT = 0.01  # 1% risk per trade
 TP_MULTIPLIER = 3.0  # 3R target
+TEST_MODE = True  # Set to False for live trading
 
 
-def load_positions_cache():
-    """Load cached open positions (stores entry/SL/TP data)"""
-    if not POSITIONS_CACHE.exists():
+# ============ ENTRY ORDERS ============
+
+def load_entry_signals():
+    """Load entry signals from entry_checker"""
+    if not SIGNALS_INPUT.exists():
+        print("[ERROR] Entry signals file not found")
         return {}
     
-    with open(POSITIONS_CACHE) as f:
+    with open(SIGNALS_INPUT) as f:
         return json.load(f)
 
 
-def save_positions_cache(positions):
-    """Save open positions cache"""
-    POSITIONS_CACHE.parent.mkdir(exist_ok=True)
-    with open(POSITIONS_CACHE, 'w') as f:
-        json.dump(positions, f, indent=2)
+def load_open_positions():
+    """Load current open positions to check for duplicates"""
+    if not POSITIONS_FILE.exists():
+        return {}
+    
+    with open(POSITIONS_FILE) as f:
+        return json.load(f)
 
 
-def add_position(symbol, entry_price, stop_loss, quantity):
+def get_total_equity(kite):
+    """Calculate total equity (margin + holdings value)"""
+    try:
+        # Get available margin
+        margins = kite.margins("equity")
+        available_margin = margins['available']['live_balance']
+        
+        # Get holdings value
+        holdings = kite.holdings()
+        holdings_value = sum(h['quantity'] * h['last_price'] for h in holdings)
+        
+        total_equity = available_margin + holdings_value
+        
+        print(f"[EQUITY] Available Margin: ₹{available_margin:,.2f}")
+        print(f"[EQUITY] Holdings Value: ₹{holdings_value:,.2f}")
+        print(f"[EQUITY] Total Equity: ₹{total_equity:,.2f}")
+        
+        return total_equity, available_margin
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to get equity: {e}")
+        return None, None
+
+
+def calculate_position_size(entry_price, stop_loss, total_equity):
     """
-    Add new position to cache when entry executed
-    Called by order_manager
+    Calculate position size based on 1% risk
+    Returns: quantity, required_capital, risk_per_share
     """
-    cache = load_positions_cache()
+    # Calculate risk amount (1% of equity)
+    risk_amount = total_equity * RISK_PERCENT
+    
+    # Calculate risk per share
+    risk_per_share = entry_price - stop_loss
+    
+    if risk_per_share <= 0:
+        print(f"[ERROR] Invalid risk: entry {entry_price} <= SL {stop_loss}")
+        return None, None, None
+    
+    # Calculate quantity
+    quantity = int(risk_amount / risk_per_share)
+    
+    if quantity <= 0:
+        print(f"[ERROR] Calculated quantity is 0")
+        return None, None, None
+    
+    # Calculate required capital
+    required_capital = entry_price * quantity
+    
+    print(f"[CALC] Risk Amount: ₹{risk_amount:,.2f} ({RISK_PERCENT*100}% of equity)")
+    print(f"[CALC] Risk/Share: ₹{risk_per_share:.2f}")
+    print(f"[CALC] Quantity: {quantity}")
+    print(f"[CALC] Required Capital: ₹{required_capital:,.2f}")
+    
+    return quantity, required_capital, risk_per_share
+
+
+def place_entry_order(kite, symbol, entry_price, stop_loss, quantity):
+    """
+    Place BUY order (market, CNC)
+    Returns: order_id or None
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    
+    if TEST_MODE:
+        print(f"\n[TEST MODE] Would place BUY order:")
+        print(f"  Symbol: {symbol}")
+        print(f"  Quantity: {quantity}")
+        print(f"  Entry: ₹{entry_price:.2f}")
+        print(f"  Stop Loss: ₹{stop_loss:.2f}")
+        
+        order_id = f"TEST_BUY_{datetime.now(ist).strftime('%H%M%S')}"
+        
+        # Log to execution log
+        log_execution({
+            "symbol": symbol,
+            "status": "TEST_EXECUTED",
+            "quantity": quantity,
+            "entry_price": entry_price,
+            "stop_loss": stop_loss,
+            "required_capital": entry_price * quantity,
+            "order_ids": {"buy": order_id},
+            "timestamp": datetime.now(ist).isoformat()
+        })
+        
+        return order_id
+    
+    # LIVE MODE - Place actual order
+    try:
+        order_id = kite.place_order(
+            variety=kite.VARIETY_REGULAR,
+            exchange=kite.EXCHANGE_NSE,
+            tradingsymbol=symbol,
+            transaction_type=kite.TRANSACTION_TYPE_BUY,
+            quantity=quantity,
+            product=kite.PRODUCT_CNC,
+            order_type=kite.ORDER_TYPE_MARKET
+        )
+        
+        print(f"\n[ORDER PLACED] BUY {symbol}")
+        print(f"  Order ID: {order_id}")
+        print(f"  Quantity: {quantity}")
+        print(f"  Entry: ₹{entry_price:.2f}")
+        print(f"  Stop Loss: ₹{stop_loss:.2f}")
+        
+        # Log to execution log
+        log_execution({
+            "symbol": symbol,
+            "status": "EXECUTED",
+            "quantity": quantity,
+            "entry_price": entry_price,
+            "stop_loss": stop_loss,
+            "order_id": order_id,
+            "timestamp": datetime.now(ist).isoformat()
+        })
+        
+        return order_id
+        
+    except Exception as e:
+        print(f"\n[ERROR] Failed to place BUY order for {symbol}: {e}")
+        
+        log_execution({
+            "symbol": symbol,
+            "status": "FAILED",
+            "error": str(e),
+            "timestamp": datetime.now(ist).isoformat()
+        })
+        
+        return None
+
+
+def add_to_positions_cache(symbol, entry_price, stop_loss, quantity):
+    """Add position to cache for monitoring"""
+    cache = {}
+    if POSITIONS_FILE.exists():
+        with open(POSITIONS_FILE) as f:
+            cache = json.load(f)
     
     # Calculate TP = entry + 3R
     risk_per_share = entry_price - stop_loss
     target_price = entry_price + (TP_MULTIPLIER * risk_per_share)
     
     ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
     
     cache[symbol] = {
         "entry_price": entry_price,
         "stop_loss": stop_loss,
         "target_price": target_price,
         "quantity": quantity,
-        "entry_timestamp": now.isoformat()
+        "entry_timestamp": datetime.now(ist).isoformat()
     }
     
-    save_positions_cache(cache)
-    print(f"[MONITOR] Added {symbol} - Entry: ₹{entry_price:.2f}, SL: ₹{stop_loss:.2f}, TP: ₹{target_price:.2f}")
+    POSITIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(POSITIONS_FILE, 'w') as f:
+        json.dump(cache, f, indent=2)
+    
+    print(f"[POSITION ADDED] {symbol} - Entry: ₹{entry_price:.2f}, SL: ₹{stop_loss:.2f}, TP: ₹{target_price:.2f}")
 
 
-def monitor_positions():
+def process_entry_orders():
     """
-    Check open CNC holdings against SL/TP
-    Cross-references cache (entry/SL/TP data) with actual holdings from Kite
+    Main entry order processing function
+    Called by main.py after entry_checker runs
     """
-    cache = load_positions_cache()
+    ist = pytz.timezone('Asia/Kolkata')
     
-    if not cache:
-        return  # No positions to monitor
+    print(f"\n{'='*60}")
+    print(f"[ORDER MANAGER] Processing Entry Orders")
+    print(f"[TIME] {datetime.now(ist).strftime('%H:%M:%S')}")
+    print(f"{'='*60}\n")
     
+    # Check monthly DD cap once at start
+    allowed, current_r, msg = can_open_new_trades()
+    print(f"[RISK CHECK] {msg}")
+    
+    if not allowed:
+        print(f"\n❌ [BLOCKED] Monthly DD cap hit - No new entries allowed\n")
+        return
+    
+    # Load entry signals
+    signals = load_entry_signals()
+    
+    if not signals:
+        print("[INFO] No entry signals to process\n")
+        return
+    
+    print(f"[SIGNALS] {len(signals)} entry signal(s) found\n")
+    
+    # Load existing positions to check for duplicates
+    existing_positions = load_open_positions()
+    
+    # Get Kite client
     kite = get_kite_client()
     
-    # Get actual holdings from account
-    try:
-        holdings = kite.holdings()
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch holdings: {e}")
+    # Get equity and margin (API returns current state including deployed capital)
+    total_equity, available_margin = get_total_equity(kite)
+    
+    if total_equity is None or available_margin is None:
+        print("[ERROR] Failed to get equity/margin - aborting\n")
         return
     
-    # Create dict of current holdings (symbol: quantity)
-    current_holdings = {}
-    for h in holdings:
-        symbol = h['tradingsymbol']
-        quantity = h['quantity']
+    print()
+    
+    # Process each signal
+    for symbol, signal_data in signals.items():
+        print(f"\n{'─'*60}")
+        print(f"[PROCESSING] {symbol}")
+        print(f"{'─'*60}")
         
-        # Only track long positions (quantity > 0)
-        if quantity > 0:
-            current_holdings[symbol] = quantity
-    
-    # Get live quotes for positions in cache
-    instruments = [f"NSE:{symbol}" for symbol in cache.keys()]
-    
-    try:
-        quotes = kite.quote(instruments)
-    except Exception as e:
-        print(f"[ERROR] Failed to get quotes: {e}")
-        return
-    
-    positions_to_remove = []
-    
-    for symbol, pos_data in cache.items():
-        # Check if we still hold this stock
-        if symbol not in current_holdings:
-            print(f"\n[POSITION CLOSED] {symbol} - No longer in holdings (manual exit or already processed)")
-            positions_to_remove.append(symbol)
+        # Check if already have position in this symbol
+        if symbol in existing_positions:
+            print(f"[SKIP] {symbol} - Already have open position")
+            log_execution({
+                "symbol": symbol,
+                "status": "SKIPPED",
+                "reason": "Already have open position",
+                "timestamp": datetime.now(ist).isoformat()
+            })
             continue
         
-        # Verify quantity matches (warn if mismatch but continue)
-        actual_quantity = current_holdings[symbol]
-        cached_quantity = pos_data['quantity']
+        entry_price = signal_data['entry_price']
+        reclaim_high = signal_data['reclaim_high']
+        stop_loss = signal_data['reclaim_low']  # Use actual reclaim_low from signal
         
-        if actual_quantity != cached_quantity:
-            print(f"\n[WARNING] {symbol} quantity mismatch - Cache: {cached_quantity}, Actual: {actual_quantity}")
-            print(f"[WARNING] Using actual quantity: {actual_quantity}")
+        print(f"[SIGNAL] Entry: ₹{entry_price:.2f}")
+        print(f"[SIGNAL] Reclaim High: ₹{reclaim_high:.2f}")
+        print(f"[SIGNAL] Stop Loss: ₹{stop_loss:.2f} (reclaim_low)")
         
-        # Get live price
-        instrument_key = f"NSE:{symbol}"
+        # Calculate position size
+        quantity, required_capital, risk_per_share = calculate_position_size(
+            entry_price, stop_loss, total_equity
+        )
         
-        if instrument_key not in quotes:
-            print(f"[WARNING] {symbol} - No quote data available")
+        if quantity is None:
+            print(f"[SKIP] {symbol} - Position sizing failed")
             continue
         
-        ltp = quotes[instrument_key]['last_price']
-        entry_price = pos_data['entry_price']
-        stop_loss = pos_data['stop_loss']
-        target_price = pos_data['target_price']
+        # Check if enough margin
+        if required_capital > available_margin:
+            print(f"\n❌ [SKIP] {symbol} - Insufficient margin")
+            print(f"   Need: ₹{required_capital:,.2f}")
+            print(f"   Have: ₹{available_margin:,.2f}")
+            
+            log_execution({
+                "symbol": symbol,
+                "status": "SKIPPED",
+                "reason": f"Insufficient margin (need ₹{required_capital:,.2f})",
+                "timestamp": datetime.now(ist).isoformat()
+            })
+            continue
         
-        # Use actual quantity from holdings (not cache)
-        quantity = actual_quantity
+        # Place order
+        order_id = place_entry_order(kite, symbol, entry_price, stop_loss, quantity)
         
-        # Check SL hit
-        if ltp <= stop_loss:
-            print(f"\n{'!'*60}")
-            print(f"[SL HIT] {symbol}")
-            print(f"  LTP: ₹{ltp:.2f} <= SL: ₹{stop_loss:.2f}")
-            print(f"  Quantity: {quantity}")
-            print(f"{'!'*60}")
+        if order_id:
+            # Add to positions cache for monitoring
+            add_to_positions_cache(symbol, entry_price, stop_loss, quantity)
             
-            exit_price = place_exit_order(kite, symbol, quantity, "SL")
-            
-            if exit_price:
-                log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
-                positions_to_remove.append(symbol)
-        
-        # Check TP hit
-        elif ltp >= target_price:
-            print(f"\n{'!'*60}")
-            print(f"[TP HIT] {symbol}")
-            print(f"  LTP: ₹{ltp:.2f} >= TP: ₹{target_price:.2f}")
-            print(f"  Quantity: {quantity}")
-            print(f"{'!'*60}")
-            
-            exit_price = place_exit_order(kite, symbol, quantity, "TP")
-            
-            if exit_price:
-                log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
-                positions_to_remove.append(symbol)
+            # Add to existing_positions dict to prevent duplicate in same cycle
+            existing_positions[symbol] = True
     
-    # Remove closed positions from cache
-    if positions_to_remove:
-        for symbol in positions_to_remove:
-            del cache[symbol]
-        save_positions_cache(cache)
-        print(f"\n[CACHE] Removed {len(positions_to_remove)} closed positions from tracking")
+    print(f"\n{'='*60}")
+    print(f"[ORDER MANAGER] Entry processing complete")
+    print(f"{'='*60}\n")
 
 
-def place_exit_order(kite, symbol, quantity, reason):
+# ============ EXIT ORDERS ============
+
+def place_exit_order(symbol, quantity, reason):
     """
-    Place market sell order to exit CNC holding
-    Returns: executed price or None
+    Place SELL order (market, CNC)
+    Called by position_monitor when SL/TP hit
+    Returns: exit_price or None
     """
+    kite = get_kite_client()
+    ist = pytz.timezone('Asia/Kolkata')
+    
+    if TEST_MODE:
+        print(f"\n[TEST MODE] Would place SELL order:")
+        print(f"  Symbol: {symbol}")
+        print(f"  Quantity: {quantity}")
+        print(f"  Reason: {reason}")
+        
+        # Get estimated exit price (LTP)
+        try:
+            quote = kite.quote(f"NSE:{symbol}")
+            exit_price = quote[f"NSE:{symbol}"]['last_price']
+            print(f"  Estimated Exit: ₹{exit_price:.2f}")
+            return exit_price
+        except:
+            return None
+    
+    # LIVE MODE - Place actual order
     try:
         order_id = kite.place_order(
             variety=kite.VARIETY_REGULAR,
@@ -188,20 +354,42 @@ def place_exit_order(kite, symbol, quantity, reason):
             order_type=kite.ORDER_TYPE_MARKET
         )
         
-        print(f"[EXIT ORDER] {reason} - {symbol} x{quantity} - Order ID: {order_id}")
+        print(f"\n[EXIT ORDER] {reason} - {symbol}")
+        print(f"  Order ID: {order_id}")
+        print(f"  Quantity: {quantity}")
         
         # Get execution price (use LTP as approximation)
         quote = kite.quote(f"NSE:{symbol}")
         exit_price = quote[f"NSE:{symbol}"]['last_price']
         
-        print(f"[EXIT PRICE] Estimated exit: ₹{exit_price:.2f}")
+        print(f"  Exit Price: ₹{exit_price:.2f}")
         
         return exit_price
         
     except Exception as e:
-        print(f"[ERROR] Exit order failed for {symbol}: {e}")
+        print(f"\n[ERROR] Exit order failed for {symbol}: {e}")
         return None
 
 
+# ============ LOGGING ============
+
+def log_execution(execution_data):
+    """Append execution to log file"""
+    EXECUTION_LOG.parent.mkdir(parents=True, exist_ok=True)
+    
+    log = []
+    if EXECUTION_LOG.exists():
+        with open(EXECUTION_LOG) as f:
+            log = json.load(f)
+    
+    log.append(execution_data)
+    
+    with open(EXECUTION_LOG, 'w') as f:
+        json.dump(log, f, indent=2)
+
+
+# ============ MAIN ============
+
 if __name__ == "__main__":
-    monitor_positions()
+    # When run directly, process entry orders
+    process_entry_orders()

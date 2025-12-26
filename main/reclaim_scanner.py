@@ -2,7 +2,8 @@
 ROOT/main/reclaim_scanner.py
 
 Scans NIFTY50 stocks for VWAP reclaim setups
-Runs at XX:01:00 (1 min after hourly candle close)
+Runs at XX:16:00 (1 min after hourly candle close)
+NO NIFTY FILTER - Just scans all stocks (filter happens at entry time)
 Outputs: reclaim_watchlist.json
 """
 
@@ -17,7 +18,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
-from filter import is_trading_enabled
 
 
 # ============ CONFIG ============
@@ -41,22 +41,21 @@ def load_instrument_tokens():
 
 def calculate_session_vwap(candles):
     """
-    Calculate cumulative VWAP from session start
-    At XX:01, last candle (candles[-1]) is incomplete current hour
-    Use candles[:-1] which are all completed candles up to previous hour
+    Calculate cumulative VWAP from completed session candles
+    
+    Args:
+        candles: List of completed candles to include in VWAP calculation
+    
     Returns: vwap_value
     """
-    if len(candles) < 2:
+    if not candles:
         return None
-    
-    # Use only completed candles (exclude last incomplete one)
-    completed_candles = candles[:-1]
     
     # VWAP calculation
     cum_tpv = 0  # Typical Price × Volume
     cum_vol = 0
     
-    for c in completed_candles:
+    for c in candles:
         tp = (c['high'] + c['low'] + c['close']) / 3
         cum_tpv += tp * c['volume']
         cum_vol += c['volume']
@@ -69,15 +68,15 @@ def calculate_session_vwap(candles):
 def get_volume_sma50(all_candles, current_candle_index):
     """
     Calculate volume SMA50 from already-fetched candles
-    Uses 50 hourly candles ending at current_candle_index
+    Uses 50 hourly candles ending BEFORE current_candle_index (not including it)
     """
     # Need at least 50 candles before current_candle_index
     if current_candle_index < 50:
         return None
     
-    # Take 50 candles ending at the candle we're checking
+    # Take 50 candles ending BEFORE the candle we're checking
     start_idx = current_candle_index - 50
-    end_idx = current_candle_index
+    end_idx = current_candle_index  # Exclusive, so this is correct
     
     volume_candles = all_candles[start_idx:end_idx]
     
@@ -108,7 +107,8 @@ def check_reclaim(candle, vwap, vol_sma50):
 def scan_stocks():
     """
     Main scanner logic
-    Validates timing and candle freshness
+    Scans all NIFTY50 stocks for reclaims
+    NO NIFTY FILTER - Filter check happens at entry time
     """
     # Use current datetime with IST timezone
     ist = pytz.timezone('Asia/Kolkata')
@@ -117,9 +117,9 @@ def scan_stocks():
     
     print(f"[SCAN] Running at {scan_date.strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # VALIDATION 1: Check if within valid scanner hours
+    # VALIDATION: Check if within valid scanner hours
     market_start = dt_time(9, 0)   # 9:00 AM
-    scanner_end = dt_time(15, 20)  # 3:20 PM (last valid scan at 3:01)
+    scanner_end = dt_time(15, 20)  # 3:20 PM (last valid scan at 3:16)
     
     if not (market_start <= current_time <= scanner_end):
         print(f"\n{'!'*60}")
@@ -129,12 +129,8 @@ def scan_stocks():
         print(f"[WARNING] Results may include stale reclaims")
         print(f"{'!'*60}\n")
     
-    # Check trend gate
-    if not is_trading_enabled():
-        print("[FILTER] Trend gate OFF - no scanning")
-        return {}
-    
-    print("[FILTER] Trend gate ON - scanning...")
+    # NO NIFTY FILTER - Just scan everything
+    print("[SCANNER] Scanning all NIFTY50 stocks (no filter)...")
     
     kite = get_kite_client()
     symbols = load_nifty50_symbols()
@@ -170,17 +166,28 @@ def scan_stocks():
             today_start = scan_date.replace(hour=9, minute=15, second=0, microsecond=0)
             today_candles = [c for c in all_candles if c['date'] >= today_start]
             
-            # Need at least 3 today's candles: 2 completed + 1 current incomplete
-            if len(today_candles) < 3:
+            # Need at least 2 today's candles: 1 completed + 1 current incomplete
+            if len(today_candles) < 2:
                 continue
-            
-            # Calculate VWAP from today's completed candles only
-            vwap = calculate_session_vwap(today_candles)
             
             # Find the candle we're checking (second-to-last in today's candles)
             check_candle = today_candles[-2]
             
-            # VALIDATION 2: Check candle freshness (should be recent)
+            # Calculate VWAP from completed candles BEFORE the candle being checked
+            # For first candle (10:16 checking 9:15-10:15): vwap_candles = [] (empty)
+            # For subsequent candles: vwap_candles = all completed candles before checking candle
+            vwap_candles = today_candles[:-2]  # Exclude checking candle and current incomplete
+            
+            # Calculate VWAP
+            if len(vwap_candles) == 0:
+                # First candle case: VWAP = the candle's own typical price
+                # For reclaim check: open < TP < close means bullish candle with specific geometry
+                vwap = (check_candle['high'] + check_candle['low'] + check_candle['close']) / 3
+            else:
+                # Subsequent candles: cumulative VWAP from prior completed candles
+                vwap = calculate_session_vwap(vwap_candles)
+            
+            # VALIDATION: Check candle freshness (should be recent)
             candle_age_minutes = (scan_date - check_candle['date']).total_seconds() / 60
             
             # Candle should be less than 90 minutes old (allows for some delay)
@@ -198,7 +205,7 @@ def scan_stocks():
             if check_candle_index is None:
                 continue
             
-            # Get volume SMA50 using data up to the candle we're checking
+            # Get volume SMA50 using data up to (but not including) the candle we're checking
             vol_sma50 = get_volume_sma50(all_candles, check_candle_index)
             
             # Check reclaim

@@ -3,7 +3,7 @@ ROOT/main/position_monitor.py
 
 Monitors open CNC holdings for SL/TP triggers
 Runs every 1 second in main loop
-Places exit orders when SL or TP hit
+Calls order_manager to place exit orders when SL or TP hit
 """
 
 import sys
@@ -15,12 +15,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
+from order_manager import place_exit_order
 from risk_manager import log_trade_exit
 
 
 # ============ CONFIG ============
 POSITIONS_CACHE = ROOT / "main" / "open_positions.json"
-TP_MULTIPLIER = 3.0  # 3R target
 
 
 def load_positions_cache():
@@ -39,33 +39,11 @@ def save_positions_cache(positions):
         json.dump(positions, f, indent=2)
 
 
-def add_position(symbol, entry_price, stop_loss, quantity):
-    """
-    Add new position to cache when entry executed
-    Called by order_manager
-    """
-    cache = load_positions_cache()
-    
-    # Calculate TP = entry + 3R
-    risk_per_share = entry_price - stop_loss
-    target_price = entry_price + (TP_MULTIPLIER * risk_per_share)
-    
-    cache[symbol] = {
-        "entry_price": entry_price,
-        "stop_loss": stop_loss,
-        "target_price": target_price,
-        "quantity": quantity,
-        "entry_timestamp": datetime.now().isoformat()
-    }
-    
-    save_positions_cache(cache)
-    print(f"[MONITOR] Added {symbol} - Entry: ₹{entry_price:.2f}, SL: ₹{stop_loss:.2f}, TP: ₹{target_price:.2f}")
-
-
 def monitor_positions():
     """
     Check open CNC holdings against SL/TP
     Cross-references cache (entry/SL/TP data) with actual holdings from Kite
+    Calls order_manager to place exit orders
     """
     cache = load_positions_cache()
     
@@ -109,13 +87,17 @@ def monitor_positions():
             positions_to_remove.append(symbol)
             continue
         
-        # Verify quantity matches (warn if mismatch but continue)
+        # Verify quantity matches (update cache if mismatch)
         actual_quantity = current_holdings[symbol]
         cached_quantity = pos_data['quantity']
         
         if actual_quantity != cached_quantity:
             print(f"\n[WARNING] {symbol} quantity mismatch - Cache: {cached_quantity}, Actual: {actual_quantity}")
-            print(f"[WARNING] Using actual quantity: {actual_quantity}")
+            print(f"[WARNING] Updating cache to actual quantity: {actual_quantity}")
+            # Update cache immediately to keep R-tracking accurate
+            pos_data['quantity'] = actual_quantity
+            cache[symbol] = pos_data
+            save_positions_cache(cache)
         
         # Get live price
         instrument_key = f"NSE:{symbol}"
@@ -129,7 +111,7 @@ def monitor_positions():
         stop_loss = pos_data['stop_loss']
         target_price = pos_data['target_price']
         
-        # Use actual quantity from holdings (not cache)
+        # Use actual quantity from holdings (cache now updated if there was mismatch)
         quantity = actual_quantity
         
         # Check SL hit
@@ -140,9 +122,11 @@ def monitor_positions():
             print(f"  Quantity: {quantity}")
             print(f"{'!'*60}")
             
-            exit_price = place_exit_order(kite, symbol, quantity, "SL")
+            # Call order_manager to place exit order
+            exit_price = place_exit_order(symbol, quantity, "SL")
             
             if exit_price:
+                # Log trade to monthly PnL
                 log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
                 positions_to_remove.append(symbol)
         
@@ -154,9 +138,11 @@ def monitor_positions():
             print(f"  Quantity: {quantity}")
             print(f"{'!'*60}")
             
-            exit_price = place_exit_order(kite, symbol, quantity, "TP")
+            # Call order_manager to place exit order
+            exit_price = place_exit_order(symbol, quantity, "TP")
             
             if exit_price:
+                # Log trade to monthly PnL
                 log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
                 positions_to_remove.append(symbol)
     
@@ -166,37 +152,6 @@ def monitor_positions():
             del cache[symbol]
         save_positions_cache(cache)
         print(f"\n[CACHE] Removed {len(positions_to_remove)} closed positions from tracking")
-
-
-def place_exit_order(kite, symbol, quantity, reason):
-    """
-    Place market sell order to exit CNC holding
-    Returns: executed price or None
-    """
-    try:
-        order_id = kite.place_order(
-            variety=kite.VARIETY_REGULAR,
-            exchange=kite.EXCHANGE_NSE,
-            tradingsymbol=symbol,
-            transaction_type=kite.TRANSACTION_TYPE_SELL,
-            quantity=quantity,
-            product=kite.PRODUCT_CNC,
-            order_type=kite.ORDER_TYPE_MARKET
-        )
-        
-        print(f"[EXIT ORDER] {reason} - {symbol} x{quantity} - Order ID: {order_id}")
-        
-        # Get execution price (use LTP as approximation)
-        quote = kite.quote(f"NSE:{symbol}")
-        exit_price = quote[f"NSE:{symbol}"]['last_price']
-        
-        print(f"[EXIT PRICE] Estimated exit: ₹{exit_price:.2f}")
-        
-        return exit_price
-        
-    except Exception as e:
-        print(f"[ERROR] Exit order failed for {symbol}: {e}")
-        return None
 
 
 if __name__ == "__main__":

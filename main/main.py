@@ -3,7 +3,7 @@ ROOT/main/main.py
 
 Main orchestrator for VWAP Reclaim Trading Bot
 Run manually at 9:00-9:15 AM - handles all hourly execution
-OPTIMIZED: Refreshes NIFTY SMA50 cache every 5 minutes for faster entry checks
+OPTIMIZED: Refreshes NIFTY SMA50 cache at hourly intervals
 """
 
 import sys
@@ -11,36 +11,39 @@ import time
 from pathlib import Path
 from datetime import datetime, time as dt_time
 import subprocess
+import json
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
+sys.path.insert(0, str(ROOT / "main"))
+
+# Import at top to catch errors early
+from filter import update_sma_cache
+from position_monitor import monitor_positions
 
 
 # ============ TIMING CONFIG ============
 SCANNER_TIMES = [
-    dt_time(9, 16, 0),  # 1 min after first candle close
-    dt_time(10, 16, 0),
+    dt_time(10, 16, 0),  # First valid scanner (checks 9:15-10:15 candle)
     dt_time(11, 16, 0),
     dt_time(12, 16, 0),
     dt_time(13, 16, 0),
     dt_time(14, 16, 0),
-    dt_time(15, 16, 0),
+    dt_time(15, 16, 0),  # Last scanner (checks 2:15-3:15 candle)
 ]
 
 ENTRY_ORDER_TIMES = [
-    dt_time(10, 14, 58),  # 2 sec before candle close
-    dt_time(11, 14, 58),
+    dt_time(11, 14, 58),  # First valid entry (uses 10:16 watchlist)
     dt_time(12, 14, 58),
     dt_time(13, 14, 58),
     dt_time(14, 14, 58),
     dt_time(15, 14, 58),
-    dt_time(15, 29, 57),
+    dt_time(15, 29, 58),  # Last candle (3:15-3:30)
 ]
 
 MARKET_CLOSE = dt_time(15, 30, 0)
 POSITION_CHECK_INTERVAL = 1  # Check positions every 1 second
 STATUS_UPDATE_INTERVAL = 600  # Status update every 10 minutes
-SMA_CACHE_UPDATE_INTERVAL = 300  # Update SMA50 cache every 5 minutes
 
 
 def run_script(script_name):
@@ -63,16 +66,6 @@ def run_script(script_name):
     except subprocess.CalledProcessError as e:
         print(f"\n❌ [{script_name}] Failed with error: {e}")
         return False
-
-
-def update_sma_cache():
-    """Update NIFTY SMA50 cache for faster entry checks"""
-    try:
-        from filter import update_sma_cache
-
-        update_sma_cache()
-    except Exception as e:
-        print(f"[ERROR] SMA cache update failed: {e}")
 
 
 def calculate_time_remaining(target_time):
@@ -101,6 +94,16 @@ def format_time_remaining(seconds):
         return f"{seconds}s"
 
 
+def clear_entry_signals():
+    """Clear entry_signals.json after processing to prevent duplicate entries"""
+    signals_file = ROOT / "main" / "entry_signals.json"
+    try:
+        with open(signals_file, 'w') as f:
+            json.dump({}, f)
+    except:
+        pass
+
+
 def main():
     """Main execution loop"""
 
@@ -108,7 +111,7 @@ def main():
     print(f"# VWAP RECLAIM TRADING BOT - CNC STRATEGY")
     print(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"# Strategy: VWAP Reclaim | Risk: 1% | TP: 3R | SL: Reclaim Low")
-    print(f"# OPTIMIZED: SMA50 caching enabled (5 min refresh)")
+    print(f"# OPTIMIZED: SMA50 caching enabled (hourly refresh)")
     print(f"{'#'*60}\n")
 
     # Track which times we've processed
@@ -117,7 +120,6 @@ def main():
     executed_trades_count = 0  # Track actual trades executed
     last_position_check = time.time()
     last_status_update = time.time()
-    last_sma_update = time.time()
     position_check_counter = 0
 
     # Mark all past times as completed (skip them)
@@ -147,10 +149,6 @@ def main():
     print(f"[STARTUP] Initializing NIFTY SMA50 cache...")
     update_sma_cache()
 
-    # Run scanner immediately on startup
-    print(f"\n[STARTUP] Running initial reclaim scanner...")
-    run_script("reclaim_scanner.py")
-
     # Find next scheduled events
     next_scanner = None
     for scan_time in SCANNER_TIMES:
@@ -177,9 +175,7 @@ def main():
             f"  • Next Entry/Order: {next_entry.strftime('%H:%M:%S')} (in {format_time_remaining(remaining)})"
         )
     print(f"[STATUS] Position Monitor: Active (every {POSITION_CHECK_INTERVAL}s)")
-    print(
-        f"[STATUS] SMA50 Cache: Auto-refresh (every {SMA_CACHE_UPDATE_INTERVAL//60} min)"
-    )
+    print(f"[STATUS] SMA50 Cache: Auto-refresh (hourly with scanner)")
     print(f"[STATUS] Market Close: {MARKET_CLOSE.strftime('%H:%M:%S')}")
     print(f"{'─'*60}\n")
 
@@ -201,18 +197,18 @@ def main():
             print(f"{'='*60}\n")
             break
 
-        # Update SMA50 cache every 5 minutes
-        if current_time - last_sma_update >= SMA_CACHE_UPDATE_INTERVAL:
-            print(f"\n[CACHE] Refreshing NIFTY SMA50 cache (5 min interval)...")
-            update_sma_cache()
-            last_sma_update = current_time
-
-        # Check for scanner execution (XX:01)
+        # Check for scanner execution (XX:16)
         for scan_time in SCANNER_TIMES:
             if scan_time not in scanner_completed and now >= scan_time:
                 print(f"\n{'▓'*60}")
                 print(f"▓ SCANNER TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}")
                 print(f"{'▓'*60}\n")
+                
+                # Update SMA50 cache before scanner (hourly update)
+                print(f"[CACHE] Refreshing NIFTY SMA50 cache (hourly)...")
+                update_sma_cache()
+                print()
+                
                 print(f"[SCAN] Running reclaim scanner (1 min after candle close)...")
                 run_script("reclaim_scanner.py")
                 scanner_completed.add(scan_time)
@@ -248,7 +244,7 @@ def main():
                 print(f"[TIMING] Entry checker completed in {entry_duration:.2f}s")
 
                 if entry_success:
-                    time.sleep(1)
+                    # NO SLEEP - Run order manager immediately
                     print(
                         f"\n[STEP 2/2] Running Order Manager (Position Sizing & Execution)..."
                     )
@@ -257,13 +253,11 @@ def main():
                     order_duration = time.time() - order_start
                     print(f"[TIMING] Order manager completed in {order_duration:.2f}s")
                     print(
-                        f"[TOTAL TIMING] End-to-end: {entry_duration + order_duration + 1:.2f}s"
+                        f"[TOTAL TIMING] End-to-end: {entry_duration + order_duration:.2f}s"
                     )
 
                     # Count actual trades executed
                     try:
-                        import json
-
                         with open(ROOT / "main" / "entry_signals.json") as f:
                             signals = json.load(f)
                             num_signals = len(signals)
@@ -274,6 +268,9 @@ def main():
                                 )
                     except:
                         pass
+                    
+                    # Clear processed signals to prevent duplicate entries
+                    clear_entry_signals()
 
                 entry_order_completed.add(entry_time)
 
@@ -293,8 +290,6 @@ def main():
         # Monitor open positions (every 1 second)
         if current_time - last_position_check >= POSITION_CHECK_INTERVAL:
             try:
-                from position_monitor import monitor_positions
-
                 monitor_positions()
                 position_check_counter += 1
             except Exception as e:

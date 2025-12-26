@@ -88,6 +88,7 @@ def check_entries():
                 continue
             
             reclaim_high = data["reclaim_high"]
+            reclaim_low = data["reclaim_low"]  # Extract reclaim_low for SL
             current_price = quotes[instrument_key]['last_price']
             
             # Check if current price > reclaim high
@@ -95,6 +96,7 @@ def check_entries():
                 entry_signals[symbol] = {
                     "entry_price": current_price,
                     "reclaim_high": reclaim_high,
+                    "reclaim_low": reclaim_low,  # Pass to order_manager for SL
                     "timestamp": now.isoformat()
                 }
                 print(f"  ✅ [ENTRY SIGNAL] {symbol} @ ₹{current_price:.2f} (reclaim: ₹{reclaim_high:.2f})")
