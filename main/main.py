@@ -68,6 +68,14 @@ def run_script(script_name):
         return False
 
 
+def save_empty_watchlist():
+    """Save empty watchlist when NIFTY filter blocks scanner"""
+    watchlist_file = ROOT / "main" / "reclaim_watchlist.json"
+    watchlist_file.parent.mkdir(exist_ok=True)
+    with open(watchlist_file, 'w') as f:
+        json.dump({}, f)
+
+
 def calculate_time_remaining(target_time):
     """Calculate seconds until target time"""
     now = datetime.now().time()
@@ -206,11 +214,18 @@ def main():
                 
                 # Update NIFTY filter before scanner (hourly update)
                 print(f"[FILTER] Refreshing NIFTY filter...")
-                update_sma_cache()
+                filter_status = update_sma_cache()
                 print()
                 
-                print(f"[SCAN] Running reclaim scanner (1 min after candle close)...")
-                run_script("reclaim_scanner.py")
+                # Check if NIFTY filter allows scanning
+                if not filter_status:
+                    print(f"❌ [BLOCKED] NIFTY filter OFF - Scanner blocked, saving empty watchlist")
+                    save_empty_watchlist()
+                    print(f"[SAVED] Empty watchlist → reclaim_watchlist.json\n")
+                else:
+                    print(f"[SCAN] Running reclaim scanner (1 min after candle close)...")
+                    run_script("reclaim_scanner.py")
+                
                 scanner_completed.add(scan_time)
 
                 # Find next scanner

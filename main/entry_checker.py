@@ -3,7 +3,7 @@ ROOT/main/entry_checker.py
 
 Checks if watchlist stocks trading above reclaim high
 Runs at XX:14:58 (2 sec before hourly candle close)
-Checks stock LTP > reclaim high (NIFTY filter already passed at scanner)
+Checks stock LTP > reclaim high (NIFTY filter already enforced at scanner)
 Outputs: entry_signals.json
 """
 
@@ -38,7 +38,7 @@ def check_entries():
     """
     Check if stock LTP > reclaim high
     Uses LTP (real-time price) at XX:14:58
-    NIFTY filter already passed at scanner time
+    NIFTY filter already enforced at scanner time
     """
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
