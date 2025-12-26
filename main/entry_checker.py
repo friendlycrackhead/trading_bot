@@ -1,9 +1,9 @@
 """
 ROOT/main/entry_checker.py
 
-Checks if watchlist stocks close above reclaim high
+Checks if watchlist stocks trading above reclaim high
 Runs at XX:14:58 (2 sec before hourly candle close)
-First checks NIFTY filter (previous candle close vs SMA50), then checks stock LTP > reclaim high
+Checks stock LTP > reclaim high (NIFTY filter already passed at scanner)
 Outputs: entry_signals.json
 """
 
@@ -17,7 +17,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
-from filter import is_trading_enabled
 
 
 # ============ CONFIG ============
@@ -37,9 +36,9 @@ def load_watchlist():
 
 def check_entries():
     """
-    STEP 1: Check NIFTY filter (previous candle close > SMA50)
-    STEP 2: If pass, check stock LTP > reclaim high
+    Check if stock LTP > reclaim high
     Uses LTP (real-time price) at XX:14:58
+    NIFTY filter already passed at scanner time
     """
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
@@ -48,26 +47,14 @@ def check_entries():
     print(f"[ENTRY CHECK] Starting at {now.strftime('%H:%M:%S')}")
     print(f"{'='*60}\n")
     
-    # STEP 1: Check NIFTY filter FIRST
-    print(f"[STEP 1/2] Checking NIFTY Filter (Previous Candle Close vs SMA50)...")
-    
-    if not is_trading_enabled():
-        print("\n❌ [BLOCKED] NIFTY filter FAILED - No entries allowed")
-        print(f"{'='*60}\n")
-        return {}
-    
-    print("\n✅ [PASSED] NIFTY filter - Proceeding with stock checks\n")
-    
-    # STEP 2: Check watchlist stocks
-    print(f"[STEP 2/2] Checking Watchlist Stocks (LTP vs Reclaim High)...")
-    
+    # Load watchlist
     watchlist = load_watchlist()
     
     if not watchlist:
         print("[INFO] Watchlist empty - no stocks to check")
         return {}
     
-    print(f"[CHECK] Checking {len(watchlist)} stocks\n")
+    print(f"[CHECK] Checking {len(watchlist)} stocks (LTP vs Reclaim High)\n")
     
     kite = get_kite_client()
     
@@ -99,9 +86,9 @@ def check_entries():
                     "reclaim_low": reclaim_low,  # Pass to order_manager for SL
                     "timestamp": now.isoformat()
                 }
-                print(f"  ✅ [ENTRY SIGNAL] {symbol} @ ₹{current_price:.2f} (reclaim: ₹{reclaim_high:.2f})")
+                print(f"  ✅ [ENTRY SIGNAL] {symbol} @ ₹{current_price:.2f} (reclaim high: ₹{reclaim_high:.2f})")
             else:
-                print(f"  ❌ [NO ENTRY] {symbol} LTP ₹{current_price:.2f} <= reclaim ₹{reclaim_high:.2f}")
+                print(f"  ❌ [NO ENTRY] {symbol} LTP ₹{current_price:.2f} <= reclaim high ₹{reclaim_high:.2f}")
     
     except Exception as e:
         print(f"\n[ERROR] Failed to get quotes: {e}")

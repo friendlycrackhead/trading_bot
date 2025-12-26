@@ -219,7 +219,7 @@ def scan_stocks():
                     "vwap": vwap,
                     "candle_age_minutes": round(candle_age_minutes, 1)
                 }
-                print(f"[RECLAIM] {symbol} @ {reclaim_high:.2f} (Low: {reclaim_low:.2f}, VWAP: {vwap:.2f}) - Candle: {check_candle['date'].strftime('%H:%M')}")
+                print(f"[RECLAIM] {symbol} | High: {reclaim_high:.2f}, Low: {reclaim_low:.2f} | VWAP: {vwap:.2f} | Candle: {check_candle['date'].strftime('%H:%M')}")
         
         except Exception as e:
             print(f"[ERROR] {symbol}: {e}")

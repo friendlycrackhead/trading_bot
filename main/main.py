@@ -3,7 +3,7 @@ ROOT/main/main.py
 
 Main orchestrator for VWAP Reclaim Trading Bot
 Run manually at 9:00-9:15 AM - handles all hourly execution
-OPTIMIZED: Refreshes NIFTY SMA50 cache at hourly intervals
+OPTIMIZED: Refreshes NIFTY filter at hourly intervals
 """
 
 import sys
@@ -111,7 +111,7 @@ def main():
     print(f"# VWAP RECLAIM TRADING BOT - CNC STRATEGY")
     print(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"# Strategy: VWAP Reclaim | Risk: 1% | TP: 3R | SL: Reclaim Low")
-    print(f"# OPTIMIZED: SMA50 caching enabled (hourly refresh)")
+    print(f"# Filter: NIFTY Hourly SMA50")
     print(f"{'#'*60}\n")
 
     # Track which times we've processed
@@ -142,7 +142,7 @@ def main():
             f"[STARTUP] Skipped {scanner_skipped} scanner times, {entry_skipped} entry times"
         )
 
-    # Initialize SMA50 cache on startup
+    # Initialize NIFTY filter on startup
     print(f"\n{'▓'*60}")
     print(f"▓ INITIALIZATION @ {datetime.now().strftime('%H:%M:%S')}")
     print(f"{'▓'*60}\n")
@@ -175,7 +175,7 @@ def main():
             f"  • Next Entry/Order: {next_entry.strftime('%H:%M:%S')} (in {format_time_remaining(remaining)})"
         )
     print(f"[STATUS] Position Monitor: Active (every {POSITION_CHECK_INTERVAL}s)")
-    print(f"[STATUS] SMA50 Cache: Auto-refresh (hourly with scanner)")
+    print(f"[STATUS] NIFTY Filter: Auto-refresh (hourly with scanner)")
     print(f"[STATUS] Market Close: {MARKET_CLOSE.strftime('%H:%M:%S')}")
     print(f"{'─'*60}\n")
 
@@ -204,8 +204,8 @@ def main():
                 print(f"▓ SCANNER TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}")
                 print(f"{'▓'*60}\n")
                 
-                # Update SMA50 cache before scanner (hourly update)
-                print(f"[CACHE] Refreshing NIFTY filter...")
+                # Update NIFTY filter before scanner (hourly update)
+                print(f"[FILTER] Refreshing NIFTY filter...")
                 update_sma_cache()
                 print()
                 
@@ -236,7 +236,7 @@ def main():
                 print(f"{'▓'*60}\n")
 
                 print(
-                    f"[STEP 1/2] Running Entry Checker (NIFTY LTP + Stock LTP checks)..."
+                    f"[ENTRY CHECK] Running Entry Checker (Stock LTP vs Reclaim High)..."
                 )
                 entry_start = time.time()
                 entry_success = run_script("entry_checker.py")
@@ -246,7 +246,7 @@ def main():
                 if entry_success:
                     # NO SLEEP - Run order manager immediately
                     print(
-                        f"\n[STEP 2/2] Running Order Manager (Position Sizing & Execution)..."
+                        f"\n[ORDER MANAGER] Processing Orders (Position Sizing & Execution)..."
                     )
                     order_start = time.time()
                     run_script("order_manager.py")
