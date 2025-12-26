@@ -1,0 +1,72 @@
+[
+  {
+    "symbol": "NESTLEIND",
+    "status": "SKIPPED",
+    "reason": "Insufficient margin (need \u20b9157306.40, have \u20b969771.36)",
+    "entry_price": 1268.6,
+    "stop_loss": 1253.4,
+    "quantity": 124,
+    "required_capital": 157306.4,
+    "timestamp": "2025-12-26T11:55:14.043194"
+  },
+  {
+    "symbol": "JSWSTEEL",
+    "status": "SKIPPED",
+    "reason": "Insufficient margin (need \u20b9131712.00, have \u20b969771.36)",
+    "entry_price": 1097.6,
+    "stop_loss": 1082,
+    "quantity": 120,
+    "required_capital": 131712.0,
+    "timestamp": "2025-12-26T12:14:29.539348"
+  },
+  {
+    "symbol": "NESTLEIND",
+    "status": "SKIPPED",
+    "reason": "Insufficient margin (need \u20b9146027.00, have \u20b969771.36)",
+    "entry_price": 1269.8,
+    "stop_loss": 1253.4,
+    "quantity": 115,
+    "required_capital": 146027.0,
+    "timestamp": "2025-12-26T12:14:29.568060"
+  },
+  {
+    "symbol": "JSWSTEEL",
+    "status": "SKIPPED",
+    "reason": "Insufficient margin (need \u20b9138209.40, have \u20b969771.36)",
+    "entry_price": 1096.9,
+    "stop_loss": 1082,
+    "quantity": 126,
+    "required_capital": 138209.40000000002,
+    "timestamp": "2025-12-26T12:14:32.710145"
+  },
+  {
+    "symbol": "NESTLEIND",
+    "status": "SKIPPED",
+    "reason": "Insufficient margin (need \u20b9147273.60, have \u20b969771.36)",
+    "entry_price": 1269.6,
+    "stop_loss": 1253.4,
+    "quantity": 116,
+    "required_capital": 147273.59999999998,
+    "timestamp": "2025-12-26T12:14:32.782017"
+  },
+  {
+    "symbol": "JSWSTEEL",
+    "status": "SKIPPED",
+    "reason": "Insufficient margin (need \u20b9129552.20, have \u20b969771.36)",
+    "entry_price": 1097.9,
+    "stop_loss": 1082,
+    "quantity": 118,
+    "required_capital": 129552.20000000001,
+    "timestamp": "2025-12-26T12:15:00.203733"
+  },
+  {
+    "symbol": "NESTLEIND",
+    "status": "SKIPPED",
+    "reason": "Insufficient margin (need \u20b9146027.00, have \u20b969771.36)",
+    "entry_price": 1269.8,
+    "stop_loss": 1253.4,
+    "quantity": 115,
+    "required_capital": 146027.0,
+    "timestamp": "2025-12-26T12:15:00.229967"
+  }
+]

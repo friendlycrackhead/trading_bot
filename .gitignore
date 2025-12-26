@@ -1,0 +1,12 @@
+# API Keys (never save these!)
+.env
+kite_credentials.json
+access_token.txt
+
+# Data files (too big)
+*.csv
+historical_data/
+
+# Python junk
+__pycache__/
+*.pyc
