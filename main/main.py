@@ -33,12 +33,12 @@ SCANNER_TIMES = [
 ]
 
 ENTRY_ORDER_TIMES = [
-    dt_time(11, 14, 58),  # First valid entry (uses 10:16 watchlist)
-    dt_time(12, 14, 58),
-    dt_time(13, 14, 58),
-    dt_time(14, 14, 58),
-    dt_time(15, 14, 58),
-    dt_time(15, 29, 58),  # Last candle (3:15-3:30)
+    dt_time(11, 14, 59),  # First valid entry (uses 10:16 watchlist)
+    dt_time(12, 14, 59),
+    dt_time(13, 14, 59),
+    dt_time(14, 14, 59),
+    dt_time(15, 14, 59),
+    dt_time(15, 29, 59),  # Last candle (3:15-3:30)
 ]
 
 MARKET_CLOSE = dt_time(15, 30, 0)
