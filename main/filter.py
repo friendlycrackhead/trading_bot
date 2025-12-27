@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
+from telegram_notifier import notify_nifty_filter
 
 
 # ============ CONFIG ============
@@ -149,6 +150,10 @@ def update_sma_cache():
         
         status = "ON" if last_close > sma50 else "OFF"
         print(f"[NIFTY FILTER] Trading: {status} | Close: {last_close:.2f} | SMA50: {sma50:.2f}")
+        
+        ist = pytz.timezone('Asia/Kolkata')
+        notify_nifty_filter(last_close > sma50, last_close, sma50, datetime.now(ist).strftime('%H:%M'))
+        
         return True
     else:
         print(f"[NIFTY FILTER] ✗ Failed to update filter")

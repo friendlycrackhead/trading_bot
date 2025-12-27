@@ -17,6 +17,7 @@ sys.path.append(str(ROOT))
 from kite_client import get_kite_client
 from order_manager import place_exit_order
 from risk_manager import log_trade_exit
+from telegram_notifier import notify_position_exit
 
 
 # ============ CONFIG ============
@@ -122,12 +123,16 @@ def monitor_positions():
             print(f"  Quantity: {quantity}")
             print(f"{'!'*60}")
             
-            # Call order_manager to place exit order
+# Call order_manager to place exit order
             exit_price = place_exit_order(symbol, quantity, "SL")
             
             if exit_price:
                 # Log trade to monthly PnL
-                log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
+                r_value = log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
+                
+                # Send Telegram notification
+                notify_position_exit(symbol, entry_price, exit_price, stop_loss, quantity, r_value, "SL Hit")
+                
                 positions_to_remove.append(symbol)
         
         # Check TP hit
@@ -138,12 +143,16 @@ def monitor_positions():
             print(f"  Quantity: {quantity}")
             print(f"{'!'*60}")
             
-            # Call order_manager to place exit order
+# Call order_manager to place exit order
             exit_price = place_exit_order(symbol, quantity, "TP")
             
             if exit_price:
                 # Log trade to monthly PnL
-                log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
+                r_value = log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
+                
+                # Send Telegram notification
+                notify_position_exit(symbol, entry_price, exit_price, stop_loss, quantity, r_value, "TP Hit")
+                
                 positions_to_remove.append(symbol)
     
     # Remove closed positions from cache

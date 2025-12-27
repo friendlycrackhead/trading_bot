@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "main"))
 # Import at top to catch errors early
 from filter import update_sma_cache
 from position_monitor import monitor_positions
+from telegram_notifier import notify_startup, notify_market_close
 
 
 # ============ TIMING CONFIG ============
@@ -156,6 +157,7 @@ def main():
     print(f"{'▓'*60}\n")
     print(f"[STARTUP] Initializing NIFTY filter...")
     update_sma_cache()
+    notify_startup()
 
     # Find next scheduled events
     next_scanner = None
@@ -202,6 +204,7 @@ def main():
             print(
                 f"[SUMMARY] Scans: {len(scanner_completed)} | Entry Checks: {len(entry_order_completed)} | Trades Executed: {executed_trades_count}"
             )
+            notify_market_close(len(scanner_completed), len(entry_order_completed), executed_trades_count)
             print(f"{'='*60}\n")
             break
 

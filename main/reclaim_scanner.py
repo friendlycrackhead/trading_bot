@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
+from telegram_notifier import notify_reclaims_found
 
 
 # ============ CONFIG ============
@@ -234,6 +235,11 @@ def save_watchlist(watchlist):
     with open(WATCHLIST_OUTPUT, 'w') as f:
         json.dump(watchlist, f, indent=2)
     print(f"\n[SAVED] {len(watchlist)} stocks → {WATCHLIST_OUTPUT}")
+    
+    # Send Telegram notification
+    ist = pytz.timezone('Asia/Kolkata')
+    stocks = list(watchlist.keys())
+    notify_reclaims_found(len(watchlist), stocks, datetime.now(ist).strftime('%H:%M'))
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
 from risk_manager import can_open_new_trades, log_trade_exit
+from telegram_notifier import notify_order_placed, notify_order_skipped
 
 
 # ============ CONFIG ============
@@ -207,6 +208,9 @@ def add_to_positions_cache(symbol, entry_price, stop_loss, quantity):
         json.dump(cache, f, indent=2)
     
     print(f"[POSITION ADDED] {symbol} - Entry: ₹{entry_price:.2f}, SL: ₹{stop_loss:.2f}, TP: ₹{target_price:.2f}")
+    
+    # Send Telegram notification
+    notify_order_placed(symbol, quantity, entry_price, stop_loss, target_price)
 
 
 def process_entry_orders():
@@ -261,14 +265,15 @@ def process_entry_orders():
         
         # Check if already have position in this symbol
         if symbol in existing_positions:
-            print(f"[SKIP] {symbol} - Already have open position")
-            log_execution({
-                "symbol": symbol,
-                "status": "SKIPPED",
-                "reason": "Already have open position",
-                "timestamp": datetime.now(ist).isoformat()
-            })
-            continue
+                    print(f"[SKIP] {symbol} - Already have open position")
+                    log_execution({
+                        "symbol": symbol,
+                        "status": "SKIPPED",
+                        "reason": "Already have open position",
+                        "timestamp": datetime.now(ist).isoformat()
+                    })
+                    notify_order_skipped(symbol, "Already have open position")
+                    continue
         
         entry_price = signal_data['entry_price']
         reclaim_high = signal_data['reclaim_high']
@@ -289,17 +294,18 @@ def process_entry_orders():
         
         # Check if enough margin
         if required_capital > available_margin:
-            print(f"\n❌ [SKIP] {symbol} - Insufficient margin")
-            print(f"   Need: ₹{required_capital:,.2f}")
-            print(f"   Have: ₹{available_margin:,.2f}")
-            
-            log_execution({
-                "symbol": symbol,
-                "status": "SKIPPED",
-                "reason": f"Insufficient margin (need ₹{required_capital:,.2f})",
-                "timestamp": datetime.now(ist).isoformat()
-            })
-            continue
+                    print(f"\n❌ [SKIP] {symbol} - Insufficient margin")
+                    print(f"   Need: ₹{required_capital:,.2f}")
+                    print(f"   Have: ₹{available_margin:,.2f}")
+                    
+                    log_execution({
+                        "symbol": symbol,
+                        "status": "SKIPPED",
+                        "reason": f"Insufficient margin (need ₹{required_capital:,.2f})",
+                        "timestamp": datetime.now(ist).isoformat()
+                    })
+                    notify_order_skipped(symbol, f"Insufficient margin (Need: ₹{required_capital:,.0f}, Have: ₹{available_margin:,.0f})")
+                    continue
         
         # Place order
         order_id = place_entry_order(kite, symbol, entry_price, stop_loss, quantity)

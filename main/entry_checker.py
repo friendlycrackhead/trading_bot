@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
+from telegram_notifier import notify_entry_signals
 
 
 # ============ CONFIG ============
@@ -101,6 +102,9 @@ def save_signals(signals):
     SIGNALS_OUTPUT.parent.mkdir(exist_ok=True)
     with open(SIGNALS_OUTPUT, 'w') as f:
         json.dump(signals, f, indent=2)
+    
+    # Send Telegram notification
+    notify_entry_signals(signals)
     
     print(f"\n{'='*60}")
     print(f"[RESULT] {len(signals)} entry signals generated")
