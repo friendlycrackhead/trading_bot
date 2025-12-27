@@ -6,6 +6,7 @@ access_token.txt
 # Data files (too big)
 *.csv
 historical_data/
+instruments_nse.json
 
 # Python junk
 __pycache__/
