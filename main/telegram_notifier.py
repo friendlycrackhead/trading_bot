@@ -193,3 +193,16 @@ def notify_market_close(scans, entries, trades):
 ⏰ 15:30"""
     
     send_telegram(message)
+
+def notify_bot_stopped(reason):
+    """Bot stopped"""
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    
+    message = f"""🛑 <b>BOT STOPPED</b>
+
+📅 {now.strftime('%Y-%m-%d')}
+⏰ {now.strftime('%H:%M:%S')}
+ℹ️ {reason}"""
+    
+    send_telegram(message)

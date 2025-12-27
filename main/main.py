@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "main"))
 # Import at top to catch errors early
 from filter import update_sma_cache
 from position_monitor import monitor_positions
-from telegram_notifier import notify_startup, notify_market_close
+from telegram_notifier import notify_startup, notify_market_close, notify_bot_stopped
 
 
 # ============ TIMING CONFIG ============
@@ -156,8 +156,8 @@ def main():
     print(f"▓ INITIALIZATION @ {datetime.now().strftime('%H:%M:%S')}")
     print(f"{'▓'*60}\n")
     print(f"[STARTUP] Initializing NIFTY filter...")
-    update_sma_cache()
     notify_startup()
+    update_sma_cache() 
 
     # Find next scheduled events
     next_scanner = None
@@ -205,6 +205,7 @@ def main():
                 f"[SUMMARY] Scans: {len(scanner_completed)} | Entry Checks: {len(entry_order_completed)} | Trades Executed: {executed_trades_count}"
             )
             notify_market_close(len(scanner_completed), len(entry_order_completed), executed_trades_count)
+            notify_bot_stopped("Market closed at 15:30")
             print(f"{'='*60}\n")
             break
 
@@ -355,10 +356,12 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n" + "=" * 60)
-        print("[STOPPED] Bot stopped by user (Ctrl+C)")
-        print("=" * 60 + "\n")
+            notify_bot_stopped("Stopped by user (Ctrl+C)")
+            print("\n\n" + "=" * 60)
+            print("[STOPPED] Bot stopped by user (Ctrl+C)")
+            print("=" * 60 + "\n")
     except Exception as e:
-        print(f"\n\n" + "=" * 60)
-        print(f"[CRITICAL ERROR] {e}")
-        print("=" * 60 + "\n")
+            notify_bot_stopped(f"Critical error: {e}")
+            print(f"\n\n" + "=" * 60)
+            print(f"[CRITICAL ERROR] {e}")
+            print("=" * 60 + "\n")
