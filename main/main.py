@@ -12,6 +12,7 @@ from pathlib import Path
 from datetime import datetime, time as dt_time
 import subprocess
 import json
+import pytz
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
@@ -45,6 +46,25 @@ ENTRY_ORDER_TIMES = [
 MARKET_CLOSE = dt_time(15, 30, 0)
 POSITION_CHECK_INTERVAL = 1  # Check positions every 1 second
 STATUS_UPDATE_INTERVAL = 600  # Status update every 10 minutes
+
+# ============ MARKET HOLIDAYS ============
+MARKET_HOLIDAYS_2026 = [
+    "2026-01-26",  # Republic Day
+    "2026-03-03",  # Holi
+    "2026-03-26",  # Shri Ram Navami
+    "2026-03-31",  # Shri Mahavir Jayanti
+    "2026-04-03",  # Good Friday
+    "2026-04-14",  # Dr. Baba Saheb Ambedkar Jayanti
+    "2026-05-01",  # Maharashtra Day
+    "2026-05-28",  # Bakri Id
+    "2026-06-26",  # Muharram
+    "2026-09-14",  # Ganesh Chaturthi
+    "2026-10-02",  # Mahatma Gandhi Jayanti
+    "2026-10-20",  # Dussehra
+    "2026-11-10",  # Diwali-Balipratipada
+    "2026-11-24",  # Prakash Gurpurb Sri Guru Nanak Dev
+    "2026-12-25",  # Christmas
+]
 
 
 def run_script(script_name):
@@ -123,6 +143,54 @@ def main():
     print(f"# Filter: NIFTY Hourly SMA50")
     print(f"{'#'*60}\n")
 
+    # CHECK IF MARKET IS OPEN
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    weekday = now.weekday()  # Monday=0, Sunday=6
+    today_str = now.strftime('%Y-%m-%d')
+    day_name = now.strftime('%A')
+    
+    # Check weekend
+    if weekday >= 5:  # Saturday=5, Sunday=6
+        print(f"\n{'!'*60}")
+        print(f"[WEEKEND] Today is {day_name}")
+        print(f"[WEEKEND] Market is closed - Bot will not run")
+        print(f"{'!'*60}\n")
+        
+        notify_bot_stopped(f"Weekend ({day_name}) - Market closed")
+        return
+    
+    # Check holiday
+    if today_str in MARKET_HOLIDAYS_2026:
+        # Find holiday name
+        holiday_names = {
+            "2026-01-26": "Republic Day",
+            "2026-03-03": "Holi",
+            "2026-03-26": "Shri Ram Navami",
+            "2026-03-31": "Shri Mahavir Jayanti",
+            "2026-04-03": "Good Friday",
+            "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+            "2026-05-01": "Maharashtra Day",
+            "2026-05-28": "Bakri Id",
+            "2026-06-26": "Muharram",
+            "2026-09-14": "Ganesh Chaturthi",
+            "2026-10-02": "Mahatma Gandhi Jayanti",
+            "2026-10-20": "Dussehra",
+            "2026-11-10": "Diwali-Balipratipada",
+            "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
+            "2026-12-25": "Christmas",
+        }
+        
+        holiday_name = holiday_names.get(today_str, "Market Holiday")
+        
+        print(f"\n{'!'*60}")
+        print(f"[HOLIDAY] Today is {holiday_name}")
+        print(f"[HOLIDAY] Market is closed - Bot will not run")
+        print(f"{'!'*60}\n")
+        
+        notify_bot_stopped(f"Market Holiday ({holiday_name})")
+        return
+
     # Track which times we've processed
     scanner_completed = set()
     entry_order_completed = set()
@@ -157,7 +225,7 @@ def main():
     print(f"{'▓'*60}\n")
     print(f"[STARTUP] Initializing NIFTY filter...")
     notify_startup()
-    update_sma_cache() 
+    update_sma_cache()
 
     # Find next scheduled events
     next_scanner = None
@@ -356,12 +424,12 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-            notify_bot_stopped("Stopped by user (Ctrl+C)")
-            print("\n\n" + "=" * 60)
-            print("[STOPPED] Bot stopped by user (Ctrl+C)")
-            print("=" * 60 + "\n")
+        notify_bot_stopped("Stopped by user (Ctrl+C)")
+        print("\n\n" + "=" * 60)
+        print("[STOPPED] Bot stopped by user (Ctrl+C)")
+        print("=" * 60 + "\n")
     except Exception as e:
-            notify_bot_stopped(f"Critical error: {e}")
-            print(f"\n\n" + "=" * 60)
-            print(f"[CRITICAL ERROR] {e}")
-            print("=" * 60 + "\n")
+        notify_bot_stopped(f"Critical error: {e}")
+        print(f"\n\n" + "=" * 60)
+        print(f"[CRITICAL ERROR] {e}")
+        print("=" * 60 + "\n")
