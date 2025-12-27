@@ -194,6 +194,7 @@ def notify_market_close(scans, entries, trades):
     
     send_telegram(message)
 
+
 def notify_bot_stopped(reason):
     """Bot stopped"""
     ist = pytz.timezone('Asia/Kolkata')
