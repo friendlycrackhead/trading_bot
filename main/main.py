@@ -143,6 +143,8 @@ def main():
     print(f"# Filter: NIFTY Hourly SMA50")
     print(f"{'#'*60}\n")
 
+    notify_startup()
+
     # CHECK IF MARKET IS OPEN
     ist = pytz.timezone('Asia/Kolkata')
     now = datetime.now(ist)
