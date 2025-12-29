@@ -3,7 +3,7 @@ ROOT/main/main.py
 
 Main orchestrator for VWAP Reclaim Trading Bot
 Run manually at 9:00-9:15 AM - handles all hourly execution
-OPTIMIZED: Refreshes NIFTY filter at hourly intervals
+Entry checks at XX:15 with NIFTY filter check
 """
 
 import sys
@@ -35,12 +35,12 @@ SCANNER_TIMES = [
 ]
 
 ENTRY_ORDER_TIMES = [
-    dt_time(11, 14, 59),  # First valid entry (uses 10:16 watchlist)
-    dt_time(12, 14, 59),
-    dt_time(13, 14, 59),
-    dt_time(14, 14, 59),
-    dt_time(15, 14, 59),
-    dt_time(15, 29, 59),  # Last candle (3:15-3:30)
+    dt_time(11, 15, 0),  # First valid entry (uses 10:16 watchlist)
+    dt_time(12, 15, 0),
+    dt_time(13, 15, 0),
+    dt_time(14, 15, 0),
+    dt_time(15, 15, 0),
+    dt_time(15, 30, 0),  # Last candle (market close)
 ]
 
 MARKET_CLOSE = dt_time(15, 30, 0)
@@ -48,7 +48,7 @@ POSITION_CHECK_INTERVAL = 1  # Check positions every 1 second
 STATUS_UPDATE_INTERVAL = 600  # Status update every 10 minutes
 
 # ============ MARKET HOLIDAYS ============
-MARKET_HOLIDAYS_2026 = [
+MARKET_HOLIDAYS_2026 = {
     "2026-01-26",  # Republic Day
     "2026-03-03",  # Holi
     "2026-03-26",  # Shri Ram Navami
@@ -61,10 +61,10 @@ MARKET_HOLIDAYS_2026 = [
     "2026-09-14",  # Ganesh Chaturthi
     "2026-10-02",  # Mahatma Gandhi Jayanti
     "2026-10-20",  # Dussehra
+    "2026-11-09",  # Diwali-Laxmi Pujan
     "2026-11-10",  # Diwali-Balipratipada
-    "2026-11-24",  # Prakash Gurpurb Sri Guru Nanak Dev
-    "2026-12-25",  # Christmas
-]
+    "2026-11-23",  # Gurunanak Jayanti
+}
 
 
 def run_script(script_name):
@@ -87,14 +87,6 @@ def run_script(script_name):
     except subprocess.CalledProcessError as e:
         print(f"\n❌ [{script_name}] Failed with error: {e}")
         return False
-
-
-def save_empty_watchlist():
-    """Save empty watchlist when NIFTY filter blocks scanner"""
-    watchlist_file = ROOT / "main" / "reclaim_watchlist.json"
-    watchlist_file.parent.mkdir(exist_ok=True)
-    with open(watchlist_file, 'w') as f:
-        json.dump({}, f)
 
 
 def calculate_time_remaining(target_time):
@@ -140,7 +132,7 @@ def main():
     print(f"# VWAP RECLAIM TRADING BOT - CNC STRATEGY")
     print(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"# Strategy: VWAP Reclaim | Risk: 1% | TP: 3R | SL: Reclaim Low")
-    print(f"# Filter: NIFTY Hourly SMA50")
+    print(f"# Filter: NIFTY Hourly SMA50 (checked at XX:15)")
     print(f"{'#'*60}\n")
 
     notify_startup()
@@ -164,7 +156,6 @@ def main():
     
     # Check holiday
     if today_str in MARKET_HOLIDAYS_2026:
-        # Find holiday name
         holiday_names = {
             "2026-01-26": "Republic Day",
             "2026-03-03": "Holi",
@@ -178,9 +169,9 @@ def main():
             "2026-09-14": "Ganesh Chaturthi",
             "2026-10-02": "Mahatma Gandhi Jayanti",
             "2026-10-20": "Dussehra",
+            "2026-11-09": "Diwali-Laxmi Pujan",
             "2026-11-10": "Diwali-Balipratipada",
-            "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
-            "2026-12-25": "Christmas",
+            "2026-11-23": "Gurunanak Jayanti",
         }
         
         holiday_name = holiday_names.get(today_str, "Market Holiday")
@@ -190,13 +181,13 @@ def main():
         print(f"[HOLIDAY] Market is closed - Bot will not run")
         print(f"{'!'*60}\n")
         
-        notify_bot_stopped(f"Market Holiday ({holiday_name})")
+        notify_bot_stopped(f"{holiday_name} - Market closed")
         return
 
     # Track which times we've processed
     scanner_completed = set()
     entry_order_completed = set()
-    executed_trades_count = 0  # Track actual trades executed
+    executed_trades_count = 0
     last_position_check = time.time()
     last_status_update = time.time()
     position_check_counter = 0
@@ -225,9 +216,26 @@ def main():
     print(f"\n{'▓'*60}")
     print(f"▓ INITIALIZATION @ {datetime.now().strftime('%H:%M:%S')}")
     print(f"{'▓'*60}\n")
-    print(f"[STARTUP] Initializing NIFTY filter...")
-    notify_startup()
+    print(f"[STARTUP] Initializing NIFTY filter cache...")
     update_sma_cache()
+
+    # CRITICAL: Run scanner if started after last scanner time
+    # This ensures watchlist is ready for next entry check
+    print(f"\n[STARTUP] Checking if scanner needs to run...")
+    
+    # Find most recent scanner time that should have run
+    last_scanner_time = None
+    for scan_time in SCANNER_TIMES:
+        if start_time > scan_time:
+            last_scanner_time = scan_time
+    
+    # If we missed a scanner, run it now
+    if last_scanner_time is not None:
+        print(f"[STARTUP] Bot started after {last_scanner_time.strftime('%H:%M')} scanner")
+        print(f"[STARTUP] Running scanner now to prepare watchlist for next entry check...")
+        run_script("reclaim_scanner.py")
+    else:
+        print(f"[STARTUP] No scanner has run yet today - watchlist will be empty until 10:16")
 
     # Find next scheduled events
     next_scanner = None
@@ -252,10 +260,10 @@ def main():
     if next_entry:
         remaining = calculate_time_remaining(next_entry)
         print(
-            f"  • Next Entry/Order: {next_entry.strftime('%H:%M:%S')} (in {format_time_remaining(remaining)})"
+            f"  • Next Entry Check: {next_entry.strftime('%H:%M:%S')} (in {format_time_remaining(remaining)})"
         )
     print(f"[STATUS] Position Monitor: Active (every {POSITION_CHECK_INTERVAL}s)")
-    print(f"[STATUS] NIFTY Filter: Auto-refresh (hourly with scanner)")
+    print(f"[STATUS] NIFTY Filter: Checked at XX:15 (entry time)")
     print(f"[STATUS] Market Close: {MARKET_CLOSE.strftime('%H:%M:%S')}")
     print(f"{'─'*60}\n")
 
@@ -274,9 +282,9 @@ def main():
             print(
                 f"[SUMMARY] Scans: {len(scanner_completed)} | Entry Checks: {len(entry_order_completed)} | Trades Executed: {executed_trades_count}"
             )
-            notify_market_close(len(scanner_completed), len(entry_order_completed), executed_trades_count)
-            notify_bot_stopped("Market closed at 15:30")
             print(f"{'='*60}\n")
+            
+            notify_market_close(len(scanner_completed), len(entry_order_completed), executed_trades_count)
             break
 
         # Check for scanner execution (XX:16)
@@ -286,20 +294,13 @@ def main():
                 print(f"▓ SCANNER TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}")
                 print(f"{'▓'*60}\n")
                 
-                # Update NIFTY filter before scanner (hourly update)
-                print(f"[FILTER] Refreshing NIFTY filter...")
-                filter_status = update_sma_cache()
+                # Refresh NIFTY cache with scanner
+                print(f"[SCANNER] Refreshing NIFTY filter cache...")
+                update_sma_cache()
                 print()
                 
-                # Check if NIFTY filter allows scanning
-                if not filter_status:
-                    print(f"❌ [BLOCKED] NIFTY filter OFF - Scanner blocked, saving empty watchlist")
-                    save_empty_watchlist()
-                    print(f"[SAVED] Empty watchlist → reclaim_watchlist.json\n")
-                else:
-                    print(f"[SCAN] Running reclaim scanner (1 min after candle close)...")
-                    run_script("reclaim_scanner.py")
-                
+                print(f"[SCANNER] Running reclaim scanner (1 min after candle close)...")
+                run_script("reclaim_scanner.py")
                 scanner_completed.add(scan_time)
 
                 # Find next scanner
@@ -315,17 +316,17 @@ def main():
                         f"\n[NEXT SCAN] {next_scanner.strftime('%H:%M:%S')} (in {format_time_remaining(remaining)})\n"
                     )
 
-        # Check for entry + order execution (XX:14:58)
+        # Check for entry + order execution (XX:15)
         for entry_time in ENTRY_ORDER_TIMES:
             if entry_time not in entry_order_completed and now >= entry_time:
                 print(f"\n{'▓'*60}")
                 print(
-                    f"▓ ENTRY/ORDER TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}"
+                    f"▓ ENTRY CHECK TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}"
                 )
                 print(f"{'▓'*60}\n")
 
                 print(
-                    f"[ENTRY CHECK] Running Entry Checker (Stock LTP vs Reclaim High)..."
+                    f"[ENTRY CHECK] Running entry checker (NIFTY filter + stock checks)..."
                 )
                 entry_start = time.time()
                 entry_success = run_script("entry_checker.py")
@@ -333,9 +334,8 @@ def main():
                 print(f"[TIMING] Entry checker completed in {entry_duration:.2f}s")
 
                 if entry_success:
-                    # NO SLEEP - Run order manager immediately
                     print(
-                        f"\n[ORDER MANAGER] Processing Orders (Position Sizing & Execution)..."
+                        f"\n[ORDER MANAGER] Processing entry orders..."
                     )
                     order_start = time.time()
                     run_script("order_manager.py")
@@ -358,7 +358,7 @@ def main():
                     except:
                         pass
                     
-                    # Clear processed signals to prevent duplicate entries
+                    # Clear entry signals to prevent duplicates
                     clear_entry_signals()
 
                 entry_order_completed.add(entry_time)
@@ -426,12 +426,12 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        notify_bot_stopped("Stopped by user (Ctrl+C)")
         print("\n\n" + "=" * 60)
         print("[STOPPED] Bot stopped by user (Ctrl+C)")
         print("=" * 60 + "\n")
+        notify_bot_stopped("User stopped (Ctrl+C)")
     except Exception as e:
-        notify_bot_stopped(f"Critical error: {e}")
         print(f"\n\n" + "=" * 60)
         print(f"[CRITICAL ERROR] {e}")
         print("=" * 60 + "\n")
+        notify_bot_stopped(f"Critical error: {e}")

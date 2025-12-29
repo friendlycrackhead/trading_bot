@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
-from telegram_notifier import notify_nifty_filter
 
 
 # ============ CONFIG ============
@@ -142,6 +141,7 @@ def update_sma_cache():
     """
     Explicitly update NIFTY filter cache
     Called hourly with scanner to keep cache fresh
+    NO Telegram notification - that happens at entry time (XX:15)
     """
     last_close, sma50 = fetch_and_calculate_sma50()
     
@@ -149,14 +149,11 @@ def update_sma_cache():
         save_sma_cache(last_close, sma50)
         
         status = "ON" if last_close > sma50 else "OFF"
-        print(f"[NIFTY FILTER] Trading: {status} | Close: {last_close:.2f} | SMA50: {sma50:.2f}")
-        
-        ist = pytz.timezone('Asia/Kolkata')
-        notify_nifty_filter(last_close > sma50, last_close, sma50, datetime.now(ist).strftime('%H:%M'))
+        print(f"[CACHE UPDATE] NIFTY SMA50 refreshed | Status: {status} | Close: {last_close:.2f} | SMA50: {sma50:.2f}")
         
         return True
     else:
-        print(f"[NIFTY FILTER] ✗ Failed to update filter")
+        print(f"[CACHE UPDATE] ✗ Failed to refresh NIFTY SMA50")
         return False
 
 
