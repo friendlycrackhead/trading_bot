@@ -40,7 +40,7 @@ ENTRY_ORDER_TIMES = [
     dt_time(13, 15, 0),
     dt_time(14, 15, 0),
     dt_time(15, 15, 0),
-    dt_time(15, 30, 0),  # Last candle (market close)
+    dt_time(15, 29, 57),  # Last candle (market close)
 ]
 
 MARKET_CLOSE = dt_time(15, 30, 0)
