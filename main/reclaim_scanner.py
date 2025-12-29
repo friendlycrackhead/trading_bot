@@ -192,7 +192,7 @@ def scan_stocks():
             candle_age_minutes = (scan_date - check_candle['date']).total_seconds() / 60
             
             # Candle should be less than 90 minutes old (allows for some delay)
-            if candle_age_minutes > 90:
+            if candle_age_minutes > 120:
                 print(f"[SKIP] {symbol} - Candle too old ({candle_age_minutes:.0f} min ago at {check_candle['date'].strftime('%H:%M')})")
                 continue
             
