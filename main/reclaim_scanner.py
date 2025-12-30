@@ -5,6 +5,9 @@ Scans NIFTY50 stocks for VWAP reclaim setups
 Runs at XX:16:00 (1 min after hourly candle close)
 NO NIFTY FILTER - Just scans all stocks (filter happens at entry time)
 Outputs: reclaim_watchlist.json
+
+UPDATED: Now uses whitelisted_symbols.csv ONLY (no fallback)
+This ensures only profitable stocks are ever scanned
 """
 
 import sys
@@ -22,15 +25,32 @@ from telegram_notifier import notify_reclaims_found
 
 
 # ============ CONFIG ============
-NIFTY50_CSV = ROOT / "nifty50_symbols.csv"
+# ONLY use whitelisted_symbols.csv (no fallback to bad stocks)
+WHITELIST_CSV = ROOT / "whitelisted_symbols.csv"
 INSTRUMENTS_JSON = ROOT / "instruments_nse.json"
 WATCHLIST_OUTPUT = ROOT / "main" / "reclaim_watchlist.json"
 
 
-def load_nifty50_symbols():
-    """Load NIFTY50 symbols from CSV"""
-    with open(NIFTY50_CSV) as f:
-        return [line.strip() for line in f if line.strip()]
+def load_symbols_to_scan():
+    """
+    Load symbols to scan from whitelist ONLY
+    Exits if whitelist not found (safety check)
+    """
+    if not WHITELIST_CSV.exists():
+        raise FileNotFoundError(
+            f"\n{'!'*60}\n"
+            f"ERROR: whitelisted_symbols.csv not found!\n"
+            f"Expected location: {WHITELIST_CSV}\n"
+            f"Cannot scan without whitelist (would include underperformers)\n"
+            f"{'!'*60}\n"
+        )
+    
+    print(f"[CONFIG] Using whitelist: {WHITELIST_CSV.name}")
+    with open(WHITELIST_CSV) as f:
+        symbols = [line.strip() for line in f if line.strip()]
+    
+    print(f"[CONFIG] Loaded {len(symbols)} whitelisted stocks\n")
+    return symbols
 
 
 def load_instrument_tokens():
@@ -108,7 +128,7 @@ def check_reclaim(candle, vwap, vol_sma50):
 def scan_stocks():
     """
     Main scanner logic
-    Scans all NIFTY50 stocks for reclaims
+    Scans whitelisted stocks ONLY for reclaims
     NO NIFTY FILTER - Filter check happens at entry time
     """
     # Use current datetime with IST timezone
@@ -130,11 +150,12 @@ def scan_stocks():
         print(f"[WARNING] Results may include stale reclaims")
         print(f"{'!'*60}\n")
     
-    # NO NIFTY FILTER - Just scan everything
-    print("[SCANNER] Scanning all NIFTY50 stocks (no filter)...")
+    # Load whitelisted symbols ONLY (exits if file missing)
+    symbols = load_symbols_to_scan()
+    
+    print(f"[SCANNER] Scanning {len(symbols)} whitelisted stocks...\n")
     
     kite = get_kite_client()
-    symbols = load_nifty50_symbols()
     tokens = load_instrument_tokens()
     
     watchlist = {}

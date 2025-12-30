@@ -5,7 +5,7 @@ Unified order manager - handles ALL order placement (entry + exit)
 Entry: Called by main after entry_checker generates signals
 Exit: Called by position_monitor when SL/TP hit
 
-UPDATED: Now uses log_manager for proper logging
+FIXED: Removed order-level logging, keeps only trade-level logging
 """
 
 import sys
@@ -20,12 +20,7 @@ sys.path.append(str(ROOT))
 from kite_client import get_kite_client
 from risk_manager import can_open_new_trades
 from telegram_notifier import notify_order_placed, notify_order_skipped
-from log_manager import (
-    log_successful_order, 
-    log_failed_order,
-    log_trade_entry,
-    generate_trade_id
-)
+from log_manager import log_trade_entry, generate_trade_id
 
 
 # ============ CONFIG ============
@@ -141,19 +136,7 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
         
         order_id = f"TEST_BUY_{datetime.now(ist).strftime('%H%M%S')}"
         
-        # Log successful order
-        log_successful_order({
-            "trade_id": trade_id,
-            "symbol": symbol,
-            "quantity": quantity,
-            "entry_price": entry_price,
-            "stop_loss": stop_loss,
-            "target_price": target_price,
-            "order_id": order_id,
-            "timestamp": entry_timestamp
-        }, order_type="entry")
-        
-        # Log trade entry
+        # Log trade entry (only trade-level, not order-level)
         log_trade_entry(
             trade_id=trade_id,
             symbol=symbol,
@@ -187,19 +170,7 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
         print(f"  Stop Loss: ₹{stop_loss:.2f}")
         print(f"  Target: ₹{target_price:.2f}")
         
-        # Log successful order
-        log_successful_order({
-            "trade_id": trade_id,
-            "symbol": symbol,
-            "quantity": quantity,
-            "entry_price": entry_price,
-            "stop_loss": stop_loss,
-            "target_price": target_price,
-            "order_id": order_id,
-            "timestamp": entry_timestamp
-        }, order_type="entry")
-        
-        # Log trade entry
+        # Log trade entry (only trade-level, not order-level)
         log_trade_entry(
             trade_id=trade_id,
             symbol=symbol,
@@ -215,10 +186,7 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
         
     except Exception as e:
         print(f"\n[ERROR] Failed to place BUY order for {symbol}: {e}")
-        
-        # Log failed order
-        log_failed_order(symbol, "Order placement failed", "entry", error=e)
-        
+        # Just print to console - no order logging
         return None, None
 
 
@@ -299,12 +267,9 @@ def process_entry_orders():
     print()
     
     # Get NIFTY filter status for entry conditions (from first signal if available)
-    # entry_checker already validated NIFTY filter, we just need values for logging
     nifty_close = None
     nifty_sma50 = None
     if signals:
-        # NIFTY data will be added to signals by entry_checker (we'll update it)
-        # For now, set as None - entry_checker already validated the filter
         first_signal = list(signals.values())[0]
         nifty_close = first_signal.get('nifty_close')
         nifty_sma50 = first_signal.get('nifty_sma50')
@@ -318,7 +283,6 @@ def process_entry_orders():
         # Check duplicate
         if symbol in existing_positions:
             print(f"[SKIP] {symbol} - Already have open position")
-            log_failed_order(symbol, "Already have open position", "entry")
             notify_order_skipped(symbol, "Already have open position")
             continue
         
@@ -337,7 +301,6 @@ def process_entry_orders():
         
         if quantity is None:
             print(f"[SKIP] {symbol} - Position sizing failed")
-            log_failed_order(symbol, "Position sizing failed", "entry")
             continue
         
         # Check margin
@@ -346,7 +309,6 @@ def process_entry_orders():
             print(f"   Need: ₹{required_capital:,.2f}")
             print(f"   Have: ₹{available_margin:,.2f}")
             
-            log_failed_order(symbol, f"Insufficient margin (need ₹{required_capital:,.2f})", "entry")
             notify_order_skipped(symbol, f"Insufficient margin (Need: ₹{required_capital:,.0f}, Have: ₹{available_margin:,.0f})")
             continue
         
@@ -398,16 +360,6 @@ def place_exit_order(symbol, quantity, reason):
             exit_price = quote[f"NSE:{symbol}"]['last_price']
             print(f"  Estimated Exit: ₹{exit_price:.2f}")
             
-            # Log successful exit order
-            log_successful_order({
-                "symbol": symbol,
-                "quantity": quantity,
-                "exit_price": exit_price,
-                "reason": reason,
-                "order_id": f"TEST_SELL_{datetime.now(ist).strftime('%H%M%S')}",
-                "timestamp": datetime.now(ist).isoformat()
-            }, order_type="exit")
-            
             return exit_price
         except:
             return None
@@ -433,21 +385,10 @@ def place_exit_order(symbol, quantity, reason):
         print(f"  Quantity: {quantity}")
         print(f"  Exit Price: ₹{exit_price:.2f}")
         
-        # Log successful exit order
-        log_successful_order({
-            "symbol": symbol,
-            "quantity": quantity,
-            "exit_price": exit_price,
-            "reason": reason,
-            "order_id": order_id,
-            "timestamp": datetime.now(ist).isoformat()
-        }, order_type="exit")
-        
         return exit_price
         
     except Exception as e:
         print(f"\n[ERROR] Exit order failed for {symbol}: {e}")
-        log_failed_order(symbol, f"Exit order failed: {reason}", "exit", error=e)
         return None
 
 

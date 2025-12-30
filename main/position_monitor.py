@@ -6,12 +6,13 @@ Runs every 1 second in main loop
 Calls order_manager to place exit orders when SL or TP hit
 
 UPDATED: Uses log_manager for trade exit logging with bars_held tracking
+FIXED: Bars held calculation only counts market hours (not 24/7)
 """
 
 import sys
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, time as dt_time
 import pytz
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,7 +20,7 @@ sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
 from order_manager import place_exit_order
-from log_manager import log_trade_exit  # NEW: Import from log_manager
+from log_manager import log_trade_exit
 from telegram_notifier import notify_position_exit
 
 
@@ -45,23 +46,63 @@ def save_positions_cache(positions):
 
 def calculate_bars_held(entry_timestamp):
     """
-    Calculate number of hourly bars held
+    Calculate number of hourly bars held during market hours ONLY
+    Market hours: 9:15 AM - 3:30 PM (6 hourly candles max per day)
+    
+    This correctly handles:
+    - Intraday trades (same day entry/exit)
+    - Overnight holds (across multiple days)
+    - Weekend holds (skips Sat/Sun)
     
     Args:
         entry_timestamp: ISO timestamp of entry
     
-    Returns: bars_held (integer)
+    Returns: bars_held (integer) - only counts market hours
+    
+    Example:
+        Entry Monday 2:00 PM → Exit Tuesday 11:00 AM
+        Monday: 2:00-3:30 = 1.5 hrs → 2 bars
+        Tuesday: 9:15-11:00 = 1.75 hrs → 2 bars
+        Total: 4 bars (not 21!)
     """
     ist = pytz.timezone('Asia/Kolkata')
     
     entry_time = datetime.fromisoformat(entry_timestamp)
     exit_time = datetime.now(ist)
     
-    # Calculate hours difference (rounded)
-    hours_diff = (exit_time - entry_time).total_seconds() / 3600
-    bars_held = max(1, round(hours_diff))  # Minimum 1 bar
+    # Market hours: 9:15 AM - 3:30 PM
+    market_start = dt_time(9, 15)
+    market_end = dt_time(15, 30)
     
-    return bars_held
+    bars = 0
+    current_date = entry_time.date()
+    end_date = exit_time.date()
+    
+    # Loop through each day from entry to exit
+    while current_date <= end_date:
+        day_start = datetime.combine(current_date, market_start, tzinfo=ist)
+        day_end = datetime.combine(current_date, market_end, tzinfo=ist)
+        
+        # Get actual start/end times for this day
+        # (might be entry time on first day, exit time on last day)
+        actual_start = max(entry_time, day_start)
+        actual_end = min(exit_time, day_end)
+        
+        # Only count if this day had any market time
+        if actual_start < actual_end:
+            # Calculate hours in market this day
+            market_seconds = (actual_end - actual_start).total_seconds()
+            market_hours = market_seconds / 3600
+            
+            # Round to nearest hour (1 hour = 1 bar)
+            # Minimum 1 bar if any time in market
+            day_bars = max(1, round(market_hours))
+            bars += day_bars
+        
+        # Move to next day
+        current_date += timedelta(days=1)
+    
+    return bars
 
 
 def monitor_positions():
@@ -135,7 +176,7 @@ def monitor_positions():
         entry_price = pos_data['entry_price']
         stop_loss = pos_data['stop_loss']
         target_price = pos_data['target_price']
-        trade_id = pos_data.get('trade_id')  # Get trade_id from cache
+        trade_id = pos_data.get('trade_id')
         entry_timestamp = pos_data.get('entry_timestamp')
         
         # Use actual quantity from holdings (cache now updated if there was mismatch)
@@ -153,14 +194,14 @@ def monitor_positions():
             exit_price = place_exit_order(symbol, quantity, "SL")
             
             if exit_price:
-                # Calculate bars held
+                # Calculate bars held (market hours only)
                 bars_held = calculate_bars_held(entry_timestamp) if entry_timestamp else 1
                 
                 # Get exit timestamp
                 ist = pytz.timezone('Asia/Kolkata')
                 exit_timestamp = datetime.now(ist).isoformat()
                 
-                # Log trade exit to log_manager (NEW)
+                # Log trade exit to log_manager
                 r_value = log_trade_exit(
                     trade_id=trade_id,
                     symbol=symbol,
@@ -187,14 +228,14 @@ def monitor_positions():
             exit_price = place_exit_order(symbol, quantity, "TP")
             
             if exit_price:
-                # Calculate bars held
+                # Calculate bars held (market hours only)
                 bars_held = calculate_bars_held(entry_timestamp) if entry_timestamp else 1
                 
                 # Get exit timestamp
                 ist = pytz.timezone('Asia/Kolkata')
                 exit_timestamp = datetime.now(ist).isoformat()
                 
-                # Log trade exit to log_manager (NEW)
+                # Log trade exit to log_manager
                 r_value = log_trade_exit(
                     trade_id=trade_id,
                     symbol=symbol,

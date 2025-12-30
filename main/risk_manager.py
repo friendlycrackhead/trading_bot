@@ -19,7 +19,7 @@ sys.path.append(str(ROOT))
 from log_manager import get_current_month_stats
 
 
-MONTHLY_DD_CAP = -5.0  # -5R monthly stop
+MONTHLY_DD_CAP = -4.0  # -5R monthly stop
 
 
 def can_open_new_trades():
