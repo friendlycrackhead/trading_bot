@@ -4,6 +4,8 @@ ROOT/main/main.py
 Main orchestrator for VWAP Reclaim Trading Bot
 Run manually at 9:00-9:15 AM - handles all hourly execution
 Entry checks at XX:15 with NIFTY filter check
+
+MONTHLY-FOCUSED: No daily archiving, monthly logs only
 """
 
 import sys
@@ -19,7 +21,6 @@ sys.path.append(str(ROOT))
 sys.path.insert(0, str(ROOT / "main"))
 
 # Import at top to catch errors early
-from filter import update_sma_cache
 from position_monitor import monitor_positions
 from telegram_notifier import notify_startup, notify_market_close, notify_bot_stopped
 
@@ -133,6 +134,7 @@ def main():
     print(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"# Strategy: VWAP Reclaim | Risk: 1% | TP: 3R | SL: Reclaim Low")
     print(f"# Filter: NIFTY Hourly SMA50 (checked at XX:15)")
+    print(f"# Logs: Monthly (Year > Month structure)")
     print(f"{'#'*60}\n")
 
     notify_startup()
@@ -212,24 +214,19 @@ def main():
             f"[STARTUP] Skipped {scanner_skipped} scanner times, {entry_skipped} entry times"
         )
 
-    # Initialize NIFTY filter on startup
     print(f"\n{'▓'*60}")
     print(f"▓ INITIALIZATION @ {datetime.now().strftime('%H:%M:%S')}")
     print(f"{'▓'*60}\n")
-    print(f"[STARTUP] Initializing NIFTY filter cache...")
-    update_sma_cache()
+    print(f"[STARTUP] NIFTY filter will be checked by entry_checker at XX:15")
 
     # CRITICAL: Run scanner if started after last scanner time
-    # This ensures watchlist is ready for next entry check
     print(f"\n[STARTUP] Checking if scanner needs to run...")
     
-    # Find most recent scanner time that should have run
     last_scanner_time = None
     for scan_time in SCANNER_TIMES:
         if start_time > scan_time:
             last_scanner_time = scan_time
     
-    # If we missed a scanner, run it now
     if last_scanner_time is not None:
         print(f"[STARTUP] Bot started after {last_scanner_time.strftime('%H:%M')} scanner")
         print(f"[STARTUP] Running scanner now to prepare watchlist for next entry check...")
@@ -284,6 +281,9 @@ def main():
             )
             print(f"{'='*60}\n")
             
+            # Monthly logs - no daily archiving needed
+            print("[INFO] Trades logged to monthly file (logs/YYYY/MM_Month/trades.json)")
+            
             notify_market_close(len(scanner_completed), len(entry_order_completed), executed_trades_count)
             break
 
@@ -293,11 +293,6 @@ def main():
                 print(f"\n{'▓'*60}")
                 print(f"▓ SCANNER TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}")
                 print(f"{'▓'*60}\n")
-                
-                # Refresh NIFTY cache with scanner
-                print(f"[SCANNER] Refreshing NIFTY filter cache...")
-                update_sma_cache()
-                print()
                 
                 print(f"[SCANNER] Running reclaim scanner (1 min after candle close)...")
                 run_script("reclaim_scanner.py")

@@ -4,19 +4,22 @@ ROOT/main/position_monitor.py
 Monitors open CNC holdings for SL/TP triggers
 Runs every 1 second in main loop
 Calls order_manager to place exit orders when SL or TP hit
+
+UPDATED: Uses log_manager for trade exit logging with bars_held tracking
 """
 
 import sys
 import json
 from pathlib import Path
 from datetime import datetime
+import pytz
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
 from order_manager import place_exit_order
-from risk_manager import log_trade_exit
+from log_manager import log_trade_exit  # NEW: Import from log_manager
 from telegram_notifier import notify_position_exit
 
 
@@ -38,6 +41,27 @@ def save_positions_cache(positions):
     POSITIONS_CACHE.parent.mkdir(exist_ok=True)
     with open(POSITIONS_CACHE, 'w') as f:
         json.dump(positions, f, indent=2)
+
+
+def calculate_bars_held(entry_timestamp):
+    """
+    Calculate number of hourly bars held
+    
+    Args:
+        entry_timestamp: ISO timestamp of entry
+    
+    Returns: bars_held (integer)
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    
+    entry_time = datetime.fromisoformat(entry_timestamp)
+    exit_time = datetime.now(ist)
+    
+    # Calculate hours difference (rounded)
+    hours_diff = (exit_time - entry_time).total_seconds() / 3600
+    bars_held = max(1, round(hours_diff))  # Minimum 1 bar
+    
+    return bars_held
 
 
 def monitor_positions():
@@ -111,6 +135,8 @@ def monitor_positions():
         entry_price = pos_data['entry_price']
         stop_loss = pos_data['stop_loss']
         target_price = pos_data['target_price']
+        trade_id = pos_data.get('trade_id')  # Get trade_id from cache
+        entry_timestamp = pos_data.get('entry_timestamp')
         
         # Use actual quantity from holdings (cache now updated if there was mismatch)
         quantity = actual_quantity
@@ -123,12 +149,26 @@ def monitor_positions():
             print(f"  Quantity: {quantity}")
             print(f"{'!'*60}")
             
-# Call order_manager to place exit order
+            # Call order_manager to place exit order
             exit_price = place_exit_order(symbol, quantity, "SL")
             
             if exit_price:
-                # Log trade to monthly PnL
-                r_value = log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
+                # Calculate bars held
+                bars_held = calculate_bars_held(entry_timestamp) if entry_timestamp else 1
+                
+                # Get exit timestamp
+                ist = pytz.timezone('Asia/Kolkata')
+                exit_timestamp = datetime.now(ist).isoformat()
+                
+                # Log trade exit to log_manager (NEW)
+                r_value = log_trade_exit(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    exit_timestamp=exit_timestamp,
+                    exit_price=exit_price,
+                    exit_reason="SL",
+                    bars_held=bars_held
+                )
                 
                 # Send Telegram notification
                 notify_position_exit(symbol, entry_price, exit_price, stop_loss, quantity, r_value, "SL Hit")
@@ -143,12 +183,26 @@ def monitor_positions():
             print(f"  Quantity: {quantity}")
             print(f"{'!'*60}")
             
-# Call order_manager to place exit order
+            # Call order_manager to place exit order
             exit_price = place_exit_order(symbol, quantity, "TP")
             
             if exit_price:
-                # Log trade to monthly PnL
-                r_value = log_trade_exit(symbol, entry_price, exit_price, stop_loss, quantity)
+                # Calculate bars held
+                bars_held = calculate_bars_held(entry_timestamp) if entry_timestamp else 1
+                
+                # Get exit timestamp
+                ist = pytz.timezone('Asia/Kolkata')
+                exit_timestamp = datetime.now(ist).isoformat()
+                
+                # Log trade exit to log_manager (NEW)
+                r_value = log_trade_exit(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    exit_timestamp=exit_timestamp,
+                    exit_price=exit_price,
+                    exit_reason="TP",
+                    bars_held=bars_held
+                )
                 
                 # Send Telegram notification
                 notify_position_exit(symbol, entry_price, exit_price, stop_loss, quantity, r_value, "TP Hit")

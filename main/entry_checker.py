@@ -6,6 +6,8 @@ Runs at XX:15:00 (right when hourly candle closes)
 STEP 1: Check NIFTY candle close > SMA50
 STEP 2: If pass, check stock LTP > reclaim high
 Outputs: entry_signals.json
+
+UPDATED: Adds NIFTY filter data to signals for logging
 """
 
 import sys
@@ -65,11 +67,9 @@ def check_nifty_filter():
             return False, None, None
         
         # Get last completed candle's close
-        # candles[-1] = the candle that just closed (e.g., 10:15-11:15 at 11:15:00)
         last_candle_close = candles[-1]['close']
         
         # Calculate SMA50 from 50 candles BEFORE the last candle
-        # candles[-52:-2] = 50 candles before the last one
         sma50_candles = [c['close'] for c in candles[-52:-2]]
         
         if len(sma50_candles) < 50:
@@ -117,7 +117,7 @@ def check_entries():
         print(f"{'─'*60}")
         print(f"[BLOCKED] NIFTY filter failed - No entries allowed")
         print(f"{'─'*60}\n")
-        return {}
+        return {}, nifty_close, sma50  # Return NIFTY data even if failed
     
     print(f"{'─'*60}")
     print(f"[NIFTY FILTER PASSED] Proceeding with stock checks")
@@ -131,7 +131,7 @@ def check_entries():
     
     if not watchlist:
         print("[INFO] Watchlist empty - no stocks to check")
-        return {}
+        return {}, nifty_close, sma50
     
     print(f"[CHECK] Checking {len(watchlist)} stocks\n")
     
@@ -139,7 +139,7 @@ def check_entries():
     
     entry_signals = {}
     
-    # Prepare instrument list for bulk quote (single API call)
+    # Prepare instrument list for bulk quote
     instruments = [f"NSE:{symbol}" for symbol in watchlist.keys()]
     
     try:
@@ -154,7 +154,7 @@ def check_entries():
                 continue
             
             reclaim_high = data["reclaim_high"]
-            reclaim_low = data["reclaim_low"]  # Extract reclaim_low for SL
+            reclaim_low = data["reclaim_low"]
             current_price = quotes[instrument_key]['last_price']
             
             # Check if current price > reclaim high
@@ -162,8 +162,11 @@ def check_entries():
                 entry_signals[symbol] = {
                     "entry_price": current_price,
                     "reclaim_high": reclaim_high,
-                    "reclaim_low": reclaim_low,  # Pass to order_manager for SL
-                    "timestamp": now.isoformat()
+                    "reclaim_low": reclaim_low,
+                    "timestamp": now.isoformat(),
+                    # ADD NIFTY data for order_manager logging
+                    "nifty_close": nifty_close,
+                    "nifty_sma50": sma50
                 }
                 print(f"  ✅ [ENTRY SIGNAL] {symbol} @ ₹{current_price:.2f} (reclaim high: ₹{reclaim_high:.2f})")
             else:
@@ -172,7 +175,7 @@ def check_entries():
     except Exception as e:
         print(f"\n[ERROR] Failed to get quotes: {e}")
     
-    return entry_signals
+    return entry_signals, nifty_close, sma50
 
 
 def save_signals(signals):
@@ -191,5 +194,5 @@ def save_signals(signals):
 
 
 if __name__ == "__main__":
-    signals = check_entries()
+    signals, nifty_close, sma50 = check_entries()
     save_signals(signals)

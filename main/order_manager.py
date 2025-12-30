@@ -4,6 +4,8 @@ ROOT/main/order_manager.py
 Unified order manager - handles ALL order placement (entry + exit)
 Entry: Called by main after entry_checker generates signals
 Exit: Called by position_monitor when SL/TP hit
+
+UPDATED: Now uses log_manager for proper logging
 """
 
 import sys
@@ -16,13 +18,18 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
 from kite_client import get_kite_client
-from risk_manager import can_open_new_trades, log_trade_exit
+from risk_manager import can_open_new_trades
 from telegram_notifier import notify_order_placed, notify_order_skipped
+from log_manager import (
+    log_successful_order, 
+    log_failed_order,
+    log_trade_entry,
+    generate_trade_id
+)
 
 
 # ============ CONFIG ============
 SIGNALS_INPUT = ROOT / "main" / "entry_signals.json"
-EXECUTION_LOG = ROOT / "logs" / "orders" / "execution_log.json"
 POSITIONS_FILE = ROOT / "main" / "open_positions.json"
 
 RISK_PERCENT = 0.01  # 1% risk per trade
@@ -108,12 +115,20 @@ def calculate_position_size(entry_price, stop_loss, total_equity):
     return quantity, required_capital, risk_per_share
 
 
-def place_entry_order(kite, symbol, entry_price, stop_loss, quantity):
+def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_conditions=None):
     """
     Place BUY order (market, CNC)
-    Returns: order_id or None
+    Returns: (order_id, trade_id) or (None, None)
     """
     ist = pytz.timezone('Asia/Kolkata')
+    entry_timestamp = datetime.now(ist).isoformat()
+    
+    # Calculate TP
+    risk_per_share = entry_price - stop_loss
+    target_price = entry_price + (TP_MULTIPLIER * risk_per_share)
+    
+    # Generate trade ID
+    trade_id = generate_trade_id(symbol, entry_timestamp)
     
     if TEST_MODE:
         print(f"\n[TEST MODE] Would place BUY order:")
@@ -121,22 +136,36 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity):
         print(f"  Quantity: {quantity}")
         print(f"  Entry: ₹{entry_price:.2f}")
         print(f"  Stop Loss: ₹{stop_loss:.2f}")
+        print(f"  Target: ₹{target_price:.2f}")
+        print(f"  Trade ID: {trade_id}")
         
         order_id = f"TEST_BUY_{datetime.now(ist).strftime('%H%M%S')}"
         
-        # Log to execution log
-        log_execution({
+        # Log successful order
+        log_successful_order({
+            "trade_id": trade_id,
             "symbol": symbol,
-            "status": "TEST_EXECUTED",
             "quantity": quantity,
             "entry_price": entry_price,
             "stop_loss": stop_loss,
-            "required_capital": entry_price * quantity,
-            "order_ids": {"buy": order_id},
-            "timestamp": datetime.now(ist).isoformat()
-        })
+            "target_price": target_price,
+            "order_id": order_id,
+            "timestamp": entry_timestamp
+        }, order_type="entry")
         
-        return order_id
+        # Log trade entry
+        log_trade_entry(
+            trade_id=trade_id,
+            symbol=symbol,
+            entry_timestamp=entry_timestamp,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            target_price=target_price,
+            quantity=quantity,
+            entry_conditions=entry_conditions
+        )
+        
+        return order_id, trade_id
     
     # LIVE MODE - Place actual order
     try:
@@ -151,51 +180,63 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity):
         )
         
         print(f"\n[ORDER PLACED] BUY {symbol}")
+        print(f"  Trade ID: {trade_id}")
         print(f"  Order ID: {order_id}")
         print(f"  Quantity: {quantity}")
         print(f"  Entry: ₹{entry_price:.2f}")
         print(f"  Stop Loss: ₹{stop_loss:.2f}")
+        print(f"  Target: ₹{target_price:.2f}")
         
-        # Log to execution log
-        log_execution({
+        # Log successful order
+        log_successful_order({
+            "trade_id": trade_id,
             "symbol": symbol,
-            "status": "EXECUTED",
             "quantity": quantity,
             "entry_price": entry_price,
             "stop_loss": stop_loss,
+            "target_price": target_price,
             "order_id": order_id,
-            "timestamp": datetime.now(ist).isoformat()
-        })
+            "timestamp": entry_timestamp
+        }, order_type="entry")
         
-        return order_id
+        # Log trade entry
+        log_trade_entry(
+            trade_id=trade_id,
+            symbol=symbol,
+            entry_timestamp=entry_timestamp,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            target_price=target_price,
+            quantity=quantity,
+            entry_conditions=entry_conditions
+        )
+        
+        return order_id, trade_id
         
     except Exception as e:
         print(f"\n[ERROR] Failed to place BUY order for {symbol}: {e}")
         
-        log_execution({
-            "symbol": symbol,
-            "status": "FAILED",
-            "error": str(e),
-            "timestamp": datetime.now(ist).isoformat()
-        })
+        # Log failed order
+        log_failed_order(symbol, "Order placement failed", "entry", error=e)
         
-        return None
+        return None, None
 
 
-def add_to_positions_cache(symbol, entry_price, stop_loss, quantity):
+def add_to_positions_cache(symbol, trade_id, entry_price, stop_loss, quantity):
     """Add position to cache for monitoring"""
     cache = {}
     if POSITIONS_FILE.exists():
         with open(POSITIONS_FILE) as f:
             cache = json.load(f)
     
-    # Calculate TP = entry + 3R
+    # Calculate TP
     risk_per_share = entry_price - stop_loss
     target_price = entry_price + (TP_MULTIPLIER * risk_per_share)
     
     ist = pytz.timezone('Asia/Kolkata')
     
     cache[symbol] = {
+        "trade_id": trade_id,
         "entry_price": entry_price,
         "stop_loss": stop_loss,
         "target_price": target_price,
@@ -225,7 +266,7 @@ def process_entry_orders():
     print(f"[TIME] {datetime.now(ist).strftime('%H:%M:%S')}")
     print(f"{'='*60}\n")
     
-    # Check monthly DD cap once at start
+    # Check monthly DD cap
     allowed, current_r, msg = can_open_new_trades()
     print(f"[RISK CHECK] {msg}")
     
@@ -242,13 +283,13 @@ def process_entry_orders():
     
     print(f"[SIGNALS] {len(signals)} entry signal(s) found\n")
     
-    # Load existing positions to check for duplicates
+    # Load existing positions
     existing_positions = load_open_positions()
     
     # Get Kite client
     kite = get_kite_client()
     
-    # Get equity and margin (API returns current state including deployed capital)
+    # Get equity
     total_equity, available_margin = get_total_equity(kite)
     
     if total_equity is None or available_margin is None:
@@ -257,64 +298,76 @@ def process_entry_orders():
     
     print()
     
+    # Get NIFTY filter status for entry conditions (from first signal if available)
+    # entry_checker already validated NIFTY filter, we just need values for logging
+    nifty_close = None
+    nifty_sma50 = None
+    if signals:
+        # NIFTY data will be added to signals by entry_checker (we'll update it)
+        # For now, set as None - entry_checker already validated the filter
+        first_signal = list(signals.values())[0]
+        nifty_close = first_signal.get('nifty_close')
+        nifty_sma50 = first_signal.get('nifty_sma50')
+    
     # Process each signal
     for symbol, signal_data in signals.items():
         print(f"\n{'─'*60}")
         print(f"[PROCESSING] {symbol}")
         print(f"{'─'*60}")
         
-        # Check if already have position in this symbol
+        # Check duplicate
         if symbol in existing_positions:
-                    print(f"[SKIP] {symbol} - Already have open position")
-                    log_execution({
-                        "symbol": symbol,
-                        "status": "SKIPPED",
-                        "reason": "Already have open position",
-                        "timestamp": datetime.now(ist).isoformat()
-                    })
-                    notify_order_skipped(symbol, "Already have open position")
-                    continue
+            print(f"[SKIP] {symbol} - Already have open position")
+            log_failed_order(symbol, "Already have open position", "entry")
+            notify_order_skipped(symbol, "Already have open position")
+            continue
         
         entry_price = signal_data['entry_price']
         reclaim_high = signal_data['reclaim_high']
-        stop_loss = signal_data['reclaim_low']  # Use actual reclaim_low from signal
+        stop_loss = signal_data['reclaim_low']
         
         print(f"[SIGNAL] Entry: ₹{entry_price:.2f}")
         print(f"[SIGNAL] Reclaim High: ₹{reclaim_high:.2f}")
         print(f"[SIGNAL] Stop Loss: ₹{stop_loss:.2f} (reclaim_low)")
         
-        # Calculate position size
+        # Position sizing
         quantity, required_capital, risk_per_share = calculate_position_size(
             entry_price, stop_loss, total_equity
         )
         
         if quantity is None:
             print(f"[SKIP] {symbol} - Position sizing failed")
+            log_failed_order(symbol, "Position sizing failed", "entry")
             continue
         
-        # Check if enough margin
+        # Check margin
         if required_capital > available_margin:
-                    print(f"\n❌ [SKIP] {symbol} - Insufficient margin")
-                    print(f"   Need: ₹{required_capital:,.2f}")
-                    print(f"   Have: ₹{available_margin:,.2f}")
-                    
-                    log_execution({
-                        "symbol": symbol,
-                        "status": "SKIPPED",
-                        "reason": f"Insufficient margin (need ₹{required_capital:,.2f})",
-                        "timestamp": datetime.now(ist).isoformat()
-                    })
-                    notify_order_skipped(symbol, f"Insufficient margin (Need: ₹{required_capital:,.0f}, Have: ₹{available_margin:,.0f})")
-                    continue
+            print(f"\n❌ [SKIP] {symbol} - Insufficient margin")
+            print(f"   Need: ₹{required_capital:,.2f}")
+            print(f"   Have: ₹{available_margin:,.2f}")
+            
+            log_failed_order(symbol, f"Insufficient margin (need ₹{required_capital:,.2f})", "entry")
+            notify_order_skipped(symbol, f"Insufficient margin (Need: ₹{required_capital:,.0f}, Have: ₹{available_margin:,.0f})")
+            continue
+        
+        # Prepare entry conditions
+        entry_conditions = {
+            "nifty_close": nifty_close,
+            "nifty_sma50": nifty_sma50,
+            "nifty_filter_passed": nifty_close > nifty_sma50 if nifty_close and nifty_sma50 else None,
+            "reclaim_high": reclaim_high,
+            "reclaim_low": stop_loss,
+            "reclaim_timestamp": signal_data.get('timestamp')
+        }
         
         # Place order
-        order_id = place_entry_order(kite, symbol, entry_price, stop_loss, quantity)
+        order_id, trade_id = place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_conditions)
         
-        if order_id:
-            # Add to positions cache for monitoring
-            add_to_positions_cache(symbol, entry_price, stop_loss, quantity)
+        if order_id and trade_id:
+            # Add to positions cache
+            add_to_positions_cache(symbol, trade_id, entry_price, stop_loss, quantity)
             
-            # Add to existing_positions dict to prevent duplicate in same cycle
+            # Update existing_positions to prevent duplicate in same cycle
             existing_positions[symbol] = True
     
     print(f"\n{'='*60}")
@@ -344,11 +397,22 @@ def place_exit_order(symbol, quantity, reason):
             quote = kite.quote(f"NSE:{symbol}")
             exit_price = quote[f"NSE:{symbol}"]['last_price']
             print(f"  Estimated Exit: ₹{exit_price:.2f}")
+            
+            # Log successful exit order
+            log_successful_order({
+                "symbol": symbol,
+                "quantity": quantity,
+                "exit_price": exit_price,
+                "reason": reason,
+                "order_id": f"TEST_SELL_{datetime.now(ist).strftime('%H%M%S')}",
+                "timestamp": datetime.now(ist).isoformat()
+            }, order_type="exit")
+            
             return exit_price
         except:
             return None
     
-    # LIVE MODE - Place actual order
+    # LIVE MODE
     try:
         order_id = kite.place_order(
             variety=kite.VARIETY_REGULAR,
@@ -360,41 +424,32 @@ def place_exit_order(symbol, quantity, reason):
             order_type=kite.ORDER_TYPE_MARKET
         )
         
-        print(f"\n[EXIT ORDER] {reason} - {symbol}")
-        print(f"  Order ID: {order_id}")
-        print(f"  Quantity: {quantity}")
-        
-        # Get execution price (use LTP as approximation)
+        # Get execution price
         quote = kite.quote(f"NSE:{symbol}")
         exit_price = quote[f"NSE:{symbol}"]['last_price']
         
+        print(f"\n[EXIT ORDER] {reason} - {symbol}")
+        print(f"  Order ID: {order_id}")
+        print(f"  Quantity: {quantity}")
         print(f"  Exit Price: ₹{exit_price:.2f}")
+        
+        # Log successful exit order
+        log_successful_order({
+            "symbol": symbol,
+            "quantity": quantity,
+            "exit_price": exit_price,
+            "reason": reason,
+            "order_id": order_id,
+            "timestamp": datetime.now(ist).isoformat()
+        }, order_type="exit")
         
         return exit_price
         
     except Exception as e:
         print(f"\n[ERROR] Exit order failed for {symbol}: {e}")
+        log_failed_order(symbol, f"Exit order failed: {reason}", "exit", error=e)
         return None
 
-
-# ============ LOGGING ============
-
-def log_execution(execution_data):
-    """Append execution to log file"""
-    EXECUTION_LOG.parent.mkdir(parents=True, exist_ok=True)
-    
-    log = []
-    if EXECUTION_LOG.exists():
-        with open(EXECUTION_LOG) as f:
-            log = json.load(f)
-    
-    log.append(execution_data)
-    
-    with open(EXECUTION_LOG, 'w') as f:
-        json.dump(log, f, indent=2)
-
-
-# ============ MAIN ============
 
 if __name__ == "__main__":
     # When run directly, process entry orders
