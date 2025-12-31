@@ -80,6 +80,10 @@ def calculate_bars_held(entry_timestamp):
     
     # Loop through each day from entry to exit
     while current_date <= end_date:
+        # Skip weekends (Saturday=5, Sunday=6)
+        if current_date.weekday() >= 5:
+            current_date += timedelta(days=1)
+            continue
         day_start = datetime.combine(current_date, market_start, tzinfo=ist)
         day_end = datetime.combine(current_date, market_end, tzinfo=ist)
         
@@ -107,9 +111,13 @@ def calculate_bars_held(entry_timestamp):
 
 def monitor_positions():
     """
-    Check open CNC holdings against SL/TP
-    Cross-references cache (entry/SL/TP data) with actual holdings from Kite
+    Check open CNC holdings/positions against SL/TP
+    Cross-references cache (entry/SL/TP data) with actual holdings AND positions from Kite
     Calls order_manager to place exit orders
+    
+    IMPORTANT: Checks both holdings (T+1) and positions (intraday) because:
+    - If bought and still holding end of day → goes to holdings
+    - If bought and sold same day → stays in positions, never reaches holdings
     """
     cache = load_positions_cache()
     
@@ -118,21 +126,44 @@ def monitor_positions():
     
     kite = get_kite_client()
     
-    # Get actual holdings from account
+    # Get actual holdings from account (T+1 positions)
     try:
         holdings = kite.holdings()
     except Exception as e:
         print(f"[ERROR] Failed to fetch holdings: {e}")
         return
     
-    # Create dict of current holdings (symbol: quantity)
+    # Get positions (intraday trades)
+    try:
+        positions = kite.positions()
+        # positions() returns dict with 'day' and 'net' keys
+        # 'day' = intraday positions
+        # 'net' = combined (day + overnight)
+        day_positions = positions.get('day', [])
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch positions: {e}")
+        return
+    
+    # Create dict of current holdings/positions (symbol: quantity)
     current_holdings = {}
+    
+    # 1. Add from holdings (T+1)
     for h in holdings:
         symbol = h['tradingsymbol']
         quantity = h['quantity']
         
         # Only track long positions (quantity > 0)
         if quantity > 0:
+            current_holdings[symbol] = quantity
+    
+    # 2. Add from positions (intraday) - these override holdings if present
+    for p in day_positions:
+        symbol = p['tradingsymbol']
+        quantity = p['quantity']
+        
+        # Only track long positions (quantity > 0)
+        if quantity > 0:
+            # If already in holdings, this is the more current value
             current_holdings[symbol] = quantity
     
     # Get live quotes for positions in cache
@@ -147,7 +178,7 @@ def monitor_positions():
     positions_to_remove = []
     
     for symbol, pos_data in cache.items():
-        # Check if we still hold this stock
+        # Check if we still hold this stock (in either holdings or positions)
         if symbol not in current_holdings:
             print(f"\n[POSITION CLOSED] {symbol} - No longer in holdings (manual exit or already processed)")
             positions_to_remove.append(symbol)

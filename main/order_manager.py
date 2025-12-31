@@ -5,13 +5,17 @@ Unified order manager - handles ALL order placement (entry + exit)
 Entry: Called by main after entry_checker generates signals
 Exit: Called by position_monitor when SL/TP hit
 
-FIXED: Removed order-level logging, keeps only trade-level logging
+UPDATED: Added order execution verification for both entry and exit orders
+- Verifies order status after placement
+- Only logs trades if order actually executed
+- Handles rejected orders gracefully
 """
 
 import sys
 import json
 from pathlib import Path
 from datetime import datetime
+import time
 import pytz
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +33,7 @@ POSITIONS_FILE = ROOT / "main" / "open_positions.json"
 
 RISK_PERCENT = 0.01  # 1% risk per trade
 TP_MULTIPLIER = 3.0  # 3R target
-TEST_MODE = True  # Set to False for live trading
+TEST_MODE = False  # Set to False for live trading
 
 
 # ============ ENTRY ORDERS ============
@@ -113,6 +117,7 @@ def calculate_position_size(entry_price, stop_loss, total_equity):
 def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_conditions=None):
     """
     Place BUY order (market, CNC)
+    Verifies order execution before logging
     Returns: (order_id, trade_id) or (None, None)
     """
     ist = pytz.timezone('Asia/Kolkata')
@@ -162,31 +167,93 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
             order_type=kite.ORDER_TYPE_MARKET
         )
         
-        print(f"\n[ORDER PLACED] BUY {symbol}")
-        print(f"  Trade ID: {trade_id}")
+        print(f"\n[ORDER SUBMITTED] BUY {symbol}")
         print(f"  Order ID: {order_id}")
-        print(f"  Quantity: {quantity}")
-        print(f"  Entry: ₹{entry_price:.2f}")
-        print(f"  Stop Loss: ₹{stop_loss:.2f}")
-        print(f"  Target: ₹{target_price:.2f}")
+        print(f"  Verifying execution...")
         
-        # Log trade entry (only trade-level, not order-level)
-        log_trade_entry(
-            trade_id=trade_id,
-            symbol=symbol,
-            entry_timestamp=entry_timestamp,
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-            target_price=target_price,
-            quantity=quantity,
-            entry_conditions=entry_conditions
-        )
+        # Wait for order to execute (market orders execute within seconds)
+        time.sleep(2)
         
-        return order_id, trade_id
+        # Verify order executed successfully
+        try:
+            order_history = kite.order_history(order_id)
+            final_status = order_history[-1]['status']
+            
+            # Check if order completed
+            if final_status == 'COMPLETE':
+                print(f"  ✅ Order EXECUTED")
+                print(f"  Trade ID: {trade_id}")
+                print(f"  Quantity: {quantity}")
+                print(f"  Entry: ₹{entry_price:.2f}")
+                print(f"  Stop Loss: ₹{stop_loss:.2f}")
+                print(f"  Target: ₹{target_price:.2f}")
+                
+                # Log trade entry (only if order completed)
+                log_trade_entry(
+                    trade_id=trade_id,
+                    symbol=symbol,
+                    entry_timestamp=entry_timestamp,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    target_price=target_price,
+                    quantity=quantity,
+                    entry_conditions=entry_conditions
+                )
+                
+                return order_id, trade_id
+                
+            elif final_status == 'REJECTED':
+                print(f"  ❌ Order REJECTED by exchange")
+                print(f"  Reason: {order_history[-1].get('status_message', 'Unknown')}")
+                return None, None
+                
+            else:
+                # Order pending/open - wait a bit more
+                print(f"  ⚠️  Order status: {final_status}")
+                print(f"  Waiting 3 more seconds...")
+                time.sleep(3)
+                
+                # Check again
+                order_history = kite.order_history(order_id)
+                final_status = order_history[-1]['status']
+                
+                if final_status == 'COMPLETE':
+                    print(f"  ✅ Order EXECUTED (delayed)")
+                    
+                    log_trade_entry(
+                        trade_id=trade_id,
+                        symbol=symbol,
+                        entry_timestamp=entry_timestamp,
+                        entry_price=entry_price,
+                        stop_loss=stop_loss,
+                        target_price=target_price,
+                        quantity=quantity,
+                        entry_conditions=entry_conditions
+                    )
+                    
+                    return order_id, trade_id
+                else:
+                    print(f"  ❌ Order failed to execute: {final_status}")
+                    return None, None
+                    
+        except Exception as e:
+            print(f"  ⚠️  Could not verify order status: {e}")
+            print(f"  Proceeding with caution - manual verification recommended")
+            # If we can't verify, log anyway since order was accepted
+            log_trade_entry(
+                trade_id=trade_id,
+                symbol=symbol,
+                entry_timestamp=entry_timestamp,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                target_price=target_price,
+                quantity=quantity,
+                entry_conditions=entry_conditions
+            )
+            return order_id, trade_id
         
     except Exception as e:
         print(f"\n[ERROR] Failed to place BUY order for {symbol}: {e}")
-        # Just print to console - no order logging
         return None, None
 
 
@@ -322,15 +389,19 @@ def process_entry_orders():
             "reclaim_timestamp": signal_data.get('timestamp')
         }
         
-        # Place order
+        # Place order (with execution verification)
         order_id, trade_id = place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_conditions)
         
         if order_id and trade_id:
-            # Add to positions cache
+            # Add to positions cache (only if order executed)
             add_to_positions_cache(symbol, trade_id, entry_price, stop_loss, quantity)
             
             # Update existing_positions to prevent duplicate in same cycle
             existing_positions[symbol] = True
+        else:
+            # Order failed or rejected
+            print(f"\n⚠️  [FAILED] {symbol} - Order not executed")
+            notify_order_skipped(symbol, "Order execution failed")
     
     print(f"\n{'='*60}")
     print(f"[ORDER MANAGER] Entry processing complete")
@@ -343,6 +414,7 @@ def place_exit_order(symbol, quantity, reason):
     """
     Place SELL order (market, CNC)
     Called by position_monitor when SL/TP hit
+    Verifies order execution before returning
     Returns: exit_price or None
     """
     kite = get_kite_client()
@@ -376,16 +448,70 @@ def place_exit_order(symbol, quantity, reason):
             order_type=kite.ORDER_TYPE_MARKET
         )
         
-        # Get execution price
-        quote = kite.quote(f"NSE:{symbol}")
-        exit_price = quote[f"NSE:{symbol}"]['last_price']
-        
-        print(f"\n[EXIT ORDER] {reason} - {symbol}")
+        print(f"\n[EXIT ORDER SUBMITTED] {reason} - {symbol}")
         print(f"  Order ID: {order_id}")
-        print(f"  Quantity: {quantity}")
-        print(f"  Exit Price: ₹{exit_price:.2f}")
+        print(f"  Verifying execution...")
         
-        return exit_price
+        # Wait for order to execute
+        time.sleep(2)
+        
+        # Verify order executed successfully
+        try:
+            order_history = kite.order_history(order_id)
+            final_status = order_history[-1]['status']
+            
+            if final_status == 'COMPLETE':
+                exit_price = order_history[-1]['average_price']
+                
+                print(f"  ✅ Exit order EXECUTED")
+                print(f"  Quantity: {quantity}")
+                print(f"  Exit Price: ₹{exit_price:.2f}")
+                
+                return exit_price
+                
+            elif final_status == 'REJECTED':
+                print(f"  ❌ Exit order REJECTED")
+                print(f"  Reason: {order_history[-1].get('status_message', 'Unknown')}")
+                return None
+                
+            else:
+                # Wait a bit more
+                print(f"  ⚠️  Order status: {final_status}")
+                print(f"  Waiting 3 more seconds...")
+                time.sleep(3)
+                
+                # Check again
+                order_history = kite.order_history(order_id)
+                final_status = order_history[-1]['status']
+                
+                if final_status == 'COMPLETE':
+                    exit_price = order_history[-1]['average_price']
+                    
+                    print(f"  ✅ Exit order EXECUTED (delayed)")
+                    print(f"  Exit Price: ₹{exit_price:.2f}")
+                    
+                    return exit_price
+                else:
+                    print(f"  ❌ Exit order failed: {final_status}")
+                    return None
+                    
+        except Exception as e:
+            print(f"  ⚠️  Could not verify order status: {e}")
+            # If we can't verify, try to get average_price from orders()
+            try:
+                all_orders = kite.orders()
+                for o in all_orders:
+                    if o['order_id'] == order_id and o['status'] == 'COMPLETE':
+                        exit_price = o['average_price']
+                        print(f"  Exit price from order book: ₹{exit_price:.2f}")
+                        return exit_price
+                # Last resort: use LTP
+                quote = kite.quote(f"NSE:{symbol}")
+                exit_price = quote[f"NSE:{symbol}"]['last_price']
+                print(f"  Using LTP as exit price (fallback): ₹{exit_price:.2f}")
+                return exit_price
+            except:
+                return None
         
     except Exception as e:
         print(f"\n[ERROR] Exit order failed for {symbol}: {e}")

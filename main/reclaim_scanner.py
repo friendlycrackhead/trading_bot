@@ -188,17 +188,28 @@ def scan_stocks():
             today_start = scan_date.replace(hour=9, minute=15, second=0, microsecond=0)
             today_candles = [c for c in all_candles if c['date'] >= today_start]
             
-            # Need at least 2 today's candles: 1 completed + 1 current incomplete
-            if len(today_candles) < 2:
+            # Need at least 1 completed candle from today
+            if len(today_candles) < 1:
                 continue
             
-            # Find the candle we're checking (second-to-last in today's candles)
-            check_candle = today_candles[-2]
+            # Find the candle we're checking
+            # At 10:16, checking the 9:15-10:15 candle (the only completed candle)
+            # At 11:16+, checking the second-to-last (most recent completed)
+            if len(today_candles) == 1:
+                # First scan of day: check the only completed candle
+                check_candle = today_candles[0]
+            else:
+                # Later scans: check second-to-last (most recent completed, ignoring current forming candle)
+                check_candle = today_candles[-2]
             
             # Calculate VWAP from completed candles BEFORE the candle being checked
-            # For first candle (10:16 checking 9:15-10:15): vwap_candles = [] (empty)
-            # For subsequent candles: vwap_candles = all completed candles before checking candle
-            vwap_candles = today_candles[:-2]  # Exclude checking candle and current incomplete
+            if len(today_candles) == 1:
+                # First candle (10:16 checking 9:15-10:15): No prior candles for VWAP
+                vwap_candles = []
+            else:
+                # Subsequent candles: all completed candles before the one we're checking
+                # today_candles[-2] is check_candle, so we want everything before it
+                vwap_candles = today_candles[:-2]
             
             # Calculate VWAP
             if len(vwap_candles) == 0:

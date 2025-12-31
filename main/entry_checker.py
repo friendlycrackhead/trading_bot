@@ -70,7 +70,7 @@ def check_nifty_filter():
         last_candle_close = candles[-1]['close']
         
         # Calculate SMA50 from 50 candles BEFORE the last candle
-        sma50_candles = [c['close'] for c in candles[-52:-2]]
+        sma50_candles = [c['close'] for c in candles[-51:-1]]
         
         if len(sma50_candles) < 50:
             print(f"[ERROR] Insufficient candles for SMA50: {len(sma50_candles)}")

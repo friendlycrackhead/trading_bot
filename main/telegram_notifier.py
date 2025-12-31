@@ -6,11 +6,26 @@ Sends Telegram notifications for important trading events
 import requests
 import json
 from datetime import datetime
+from pathlib import Path
 import pytz
 
 # ============ CONFIG ============
-TELEGRAM_BOT_TOKEN = "8228088339:AAE49S2enCCmjeiZBFHmhAN8LLEVjMTYAwY"
-TELEGRAM_CHAT_ID = "1993755474"
+
+ROOT = Path(__file__).resolve().parent.parent
+CREDENTIALS_FILE = ROOT / "telegram_bot_credentials.json"
+
+# Load credentials from JSON
+def load_telegram_credentials():
+    if not CREDENTIALS_FILE.exists():
+        print(f"[WARNING] Telegram credentials not found: {CREDENTIALS_FILE}")
+        return None, None
+    
+    with open(CREDENTIALS_FILE) as f:
+        creds = json.load(f)
+    
+    return creds.get("bot_token"), creds.get("chat_id")
+
+TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID = load_telegram_credentials()
 
 # Set to False to disable notifications
 NOTIFICATIONS_ENABLED = True
@@ -19,6 +34,10 @@ NOTIFICATIONS_ENABLED = True
 def send_telegram(message):
     """Send message to Telegram"""
     if not NOTIFICATIONS_ENABLED:
+        return
+    
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[WARNING] Telegram credentials not configured - skipping notification")
         return
     
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"

@@ -1,6 +1,8 @@
 """
 ROOT/main/risk_manager.py
 
+"TEST"
+
 Tracks monthly R and enforces -5R drawdown cap
 
 UPDATED: Uses log_manager for statistics, keeps only DD cap enforcement
@@ -19,7 +21,7 @@ sys.path.append(str(ROOT))
 from log_manager import get_current_month_stats
 
 
-MONTHLY_DD_CAP = -4.0  # -5R monthly stop
+MONTHLY_DD_CAP = -4.0  # -4R monthly stop
 
 
 def can_open_new_trades():
