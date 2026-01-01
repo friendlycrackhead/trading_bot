@@ -9,6 +9,10 @@ UPDATED: Added order execution verification for both entry and exit orders
 - Verifies order status after placement
 - Only logs trades if order actually executed
 - Handles rejected orders gracefully
+
+FIXED:
+- Added telegram notification in TEST_MODE
+- Better error handling
 """
 
 import sys
@@ -153,6 +157,9 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
             entry_conditions=entry_conditions
         )
         
+        # Send Telegram notification even in test mode
+        notify_order_placed(symbol, quantity, entry_price, stop_loss, target_price)
+        
         return order_id, trade_id
     
     # LIVE MODE - Place actual order
@@ -285,8 +292,9 @@ def add_to_positions_cache(symbol, trade_id, entry_price, stop_loss, quantity):
     
     print(f"[POSITION ADDED] {symbol} - Entry: ₹{entry_price:.2f}, SL: ₹{stop_loss:.2f}, TP: ₹{target_price:.2f}")
     
-    # Send Telegram notification
-    notify_order_placed(symbol, quantity, entry_price, stop_loss, target_price)
+    # Send Telegram notification (for live mode - test mode sends in place_entry_order)
+    if not TEST_MODE:
+        notify_order_placed(symbol, quantity, entry_price, stop_loss, target_price)
 
 
 def process_entry_orders():
@@ -368,6 +376,7 @@ def process_entry_orders():
         
         if quantity is None:
             print(f"[SKIP] {symbol} - Position sizing failed")
+            notify_order_skipped(symbol, "Position sizing failed")
             continue
         
         # Check margin
@@ -398,6 +407,9 @@ def process_entry_orders():
             
             # Update existing_positions to prevent duplicate in same cycle
             existing_positions[symbol] = True
+            
+            # Reduce available margin for next position
+            available_margin -= required_capital
         else:
             # Order failed or rejected
             print(f"\n⚠️  [FAILED] {symbol} - Order not executed")
@@ -433,7 +445,8 @@ def place_exit_order(symbol, quantity, reason):
             print(f"  Estimated Exit: ₹{exit_price:.2f}")
             
             return exit_price
-        except:
+        except Exception as e:
+            print(f"  [ERROR] Could not get LTP: {e}")
             return None
     
     # LIVE MODE
@@ -510,7 +523,8 @@ def place_exit_order(symbol, quantity, reason):
                 exit_price = quote[f"NSE:{symbol}"]['last_price']
                 print(f"  Using LTP as exit price (fallback): ₹{exit_price:.2f}")
                 return exit_price
-            except:
+            except Exception as e2:
+                print(f"  [ERROR] Fallback also failed: {e2}")
                 return None
         
     except Exception as e:

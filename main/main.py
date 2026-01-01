@@ -6,6 +6,11 @@ Run manually at 9:00-9:15 AM - handles all hourly execution
 Entry checks at XX:15 with NIFTY filter check
 
 MONTHLY-FOCUSED: No daily archiving, monthly logs only
+
+FIXED:
+- Removed 15:29:57 entry time (too late, market closes at 15:30)
+- Fixed trade counting to use open_positions.json instead of entry_signals.json
+- Added proper exception handling
 """
 
 import sys
@@ -40,8 +45,8 @@ ENTRY_ORDER_TIMES = [
     dt_time(12, 15, 0),
     dt_time(13, 15, 0),
     dt_time(14, 15, 0),
-    dt_time(15, 15, 0),
-    dt_time(15, 29, 57),  # Last candle (market close)
+    dt_time(15, 15, 0),  # Last safe entry - 15 minutes before close
+    # REMOVED: dt_time(15, 29, 57) - too risky, only 3 seconds before close
 ]
 
 MARKET_CLOSE = dt_time(15, 30, 0)
@@ -122,8 +127,21 @@ def clear_entry_signals():
     try:
         with open(signals_file, 'w') as f:
             json.dump({}, f)
-    except:
-        pass
+    except Exception as e:
+        print(f"[WARNING] Could not clear entry signals: {e}")
+
+
+def get_open_positions_count():
+    """Get count of currently open positions from cache"""
+    positions_file = ROOT / "main" / "open_positions.json"
+    try:
+        if positions_file.exists():
+            with open(positions_file) as f:
+                positions = json.load(f)
+                return len(positions)
+    except Exception as e:
+        print(f"[WARNING] Could not read positions: {e}")
+    return 0
 
 
 def main():
@@ -320,6 +338,9 @@ def main():
                 )
                 print(f"{'▓'*60}\n")
 
+                # Get positions count BEFORE running order manager
+                positions_before = get_open_positions_count()
+
                 print(
                     f"[ENTRY CHECK] Running entry checker (NIFTY filter + stock checks)..."
                 )
@@ -340,18 +361,15 @@ def main():
                         f"[TOTAL TIMING] End-to-end: {entry_duration + order_duration:.2f}s"
                     )
 
-                    # Count actual trades executed
-                    try:
-                        with open(ROOT / "main" / "entry_signals.json") as f:
-                            signals = json.load(f)
-                            num_signals = len(signals)
-                            if num_signals > 0:
-                                executed_trades_count += num_signals
-                                print(
-                                    f"[TRADES] {num_signals} positions opened this cycle"
-                                )
-                    except:
-                        pass
+                    # Count actual trades executed by comparing positions before/after
+                    positions_after = get_open_positions_count()
+                    new_trades = positions_after - positions_before
+                    
+                    if new_trades > 0:
+                        executed_trades_count += new_trades
+                        print(f"[TRADES] {new_trades} new position(s) opened this cycle")
+                    else:
+                        print(f"[TRADES] No new positions opened this cycle")
                     
                     # Clear entry signals to prevent duplicates
                     clear_entry_signals()
