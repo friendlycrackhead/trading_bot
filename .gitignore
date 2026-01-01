@@ -11,6 +11,9 @@ instruments_nse.json
 # Auto generated files
 *.json
 
+# Miscellaneous
+*.txt
+
 # Python junk
 __pycache__/
 *.pyc
