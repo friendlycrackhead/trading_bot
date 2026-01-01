@@ -11,6 +11,7 @@ FIXED:
 - Removed 15:29:57 entry time (too late, market closes at 15:30)
 - Fixed trade counting to use open_positions.json instead of entry_signals.json
 - Added proper exception handling
+- Skip order_manager if no entry signals (avoid redundant calls)
 """
 
 import sys
@@ -350,26 +351,37 @@ def main():
                 print(f"[TIMING] Entry checker completed in {entry_duration:.2f}s")
 
                 if entry_success:
-                    print(
-                        f"\n[ORDER MANAGER] Processing entry orders..."
-                    )
-                    order_start = time.time()
-                    run_script("order_manager.py")
-                    order_duration = time.time() - order_start
-                    print(f"[TIMING] Order manager completed in {order_duration:.2f}s")
-                    print(
-                        f"[TOTAL TIMING] End-to-end: {entry_duration + order_duration:.2f}s"
-                    )
-
-                    # Count actual trades executed by comparing positions before/after
-                    positions_after = get_open_positions_count()
-                    new_trades = positions_after - positions_before
+                    # Check if there are actually signals to process
+                    signals_file = ROOT / "main" / "entry_signals.json"
+                    has_signals = False
+                    num_signals = 0
+                    try:
+                        with open(signals_file) as f:
+                            signals = json.load(f)
+                            num_signals = len(signals)
+                            has_signals = num_signals > 0
+                    except Exception as e:
+                        print(f"[WARNING] Could not read signals file: {e}")
                     
-                    if new_trades > 0:
-                        executed_trades_count += new_trades
-                        print(f"[TRADES] {new_trades} new position(s) opened this cycle")
+                    if has_signals:
+                        print(f"\n[ORDER MANAGER] Processing {num_signals} entry signal(s)...")
+                        order_start = time.time()
+                        run_script("order_manager.py")
+                        order_duration = time.time() - order_start
+                        print(f"[TIMING] Order manager completed in {order_duration:.2f}s")
+                        print(f"[TOTAL TIMING] End-to-end: {entry_duration + order_duration:.2f}s")
+
+                        # Count actual trades executed by comparing positions before/after
+                        positions_after = get_open_positions_count()
+                        new_trades = positions_after - positions_before
+                        
+                        if new_trades > 0:
+                            executed_trades_count += new_trades
+                            print(f"[TRADES] {new_trades} new position(s) opened this cycle")
+                        else:
+                            print(f"[TRADES] No new positions opened this cycle")
                     else:
-                        print(f"[TRADES] No new positions opened this cycle")
+                        print(f"[ENTRY CHECK] No entry signals - skipping order manager")
                     
                     # Clear entry signals to prevent duplicates
                     clear_entry_signals()
