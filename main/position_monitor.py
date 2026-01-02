@@ -18,30 +18,33 @@ import pytz
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
-from kite_client import get_kite_client
+from kite_client import get_kite_client, kite_retry
 from order_manager import place_exit_order
 from log_manager import log_trade_exit
 from telegram_notifier import notify_position_exit
+from json_utils import atomic_json_write, safe_json_read
 
 
 # ============ CONFIG ============
 POSITIONS_CACHE = ROOT / "main" / "open_positions.json"
 
+# Market holidays for 2026 (from main.py)
+MARKET_HOLIDAYS_2026 = {
+    "2026-01-26", "2026-03-03", "2026-03-26", "2026-03-31",
+    "2026-04-03", "2026-04-14", "2026-05-01", "2026-05-28",
+    "2026-06-26", "2026-09-14", "2026-10-02", "2026-10-20",
+    "2026-11-09", "2026-11-10", "2026-11-23",
+}
+
 
 def load_positions_cache():
     """Load cached open positions (stores entry/SL/TP data)"""
-    if not POSITIONS_CACHE.exists():
-        return {}
-    
-    with open(POSITIONS_CACHE) as f:
-        return json.load(f)
+    return safe_json_read(POSITIONS_CACHE, default={})
 
 
 def save_positions_cache(positions):
-    """Save open positions cache"""
-    POSITIONS_CACHE.parent.mkdir(exist_ok=True)
-    with open(POSITIONS_CACHE, 'w') as f:
-        json.dump(positions, f, indent=2)
+    """Save open positions cache (atomic write)"""
+    atomic_json_write(POSITIONS_CACHE, positions)
 
 
 def calculate_bars_held(entry_timestamp):
@@ -84,6 +87,13 @@ def calculate_bars_held(entry_timestamp):
         if current_date.weekday() >= 5:
             current_date += timedelta(days=1)
             continue
+
+        # Skip market holidays
+        date_str = current_date.strftime('%Y-%m-%d')
+        if date_str in MARKET_HOLIDAYS_2026:
+            current_date += timedelta(days=1)
+            continue
+
         day_start = datetime.combine(current_date, market_start, tzinfo=ist)
         day_end = datetime.combine(current_date, market_end, tzinfo=ist)
         
@@ -125,23 +135,25 @@ def monitor_positions():
         return  # No positions to monitor
     
     kite = get_kite_client()
-    
-    # Get actual holdings from account (T+1 positions)
+
+    # Get actual holdings from account (T+1 positions) with retry
     try:
-        holdings = kite.holdings()
+        holdings = kite_retry(kite.holdings)
     except Exception as e:
-        print(f"[ERROR] Failed to fetch holdings: {e}")
+        print(f"[ERROR] Failed to fetch holdings after retries: {e}")
+        print(f"[ERROR] Skipping this monitoring cycle")
         return
-    
-    # Get positions (intraday trades)
+
+    # Get positions (intraday trades) with retry
     try:
-        positions = kite.positions()
+        positions = kite_retry(kite.positions)
         # positions() returns dict with 'day' and 'net' keys
         # 'day' = intraday positions
         # 'net' = combined (day + overnight)
         day_positions = positions.get('day', [])
     except Exception as e:
-        print(f"[ERROR] Failed to fetch positions: {e}")
+        print(f"[ERROR] Failed to fetch positions after retries: {e}")
+        print(f"[ERROR] Skipping this monitoring cycle")
         return
     
     # Create dict of current holdings/positions (symbol: quantity)
@@ -166,13 +178,14 @@ def monitor_positions():
             # If already in holdings, this is the more current value
             current_holdings[symbol] = quantity
     
-    # Get live quotes for positions in cache
+    # Get live quotes for positions in cache with retry
     instruments = [f"NSE:{symbol}" for symbol in cache.keys()]
-    
+
     try:
-        quotes = kite.quote(instruments)
+        quotes = kite_retry(kite.quote, instruments)
     except Exception as e:
-        print(f"[ERROR] Failed to get quotes: {e}")
+        print(f"[ERROR] Failed to get quotes after retries: {e}")
+        print(f"[ERROR] Skipping this monitoring cycle")
         return
     
     positions_to_remove = []

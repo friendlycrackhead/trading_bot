@@ -51,7 +51,7 @@ ENTRY_ORDER_TIMES = [
 ]
 
 MARKET_CLOSE = dt_time(15, 30, 0)
-POSITION_CHECK_INTERVAL = 1  # Check positions every 1 second
+POSITION_CHECK_INTERVAL = 5  # Check positions every 5 seconds (reduced API load)
 STATUS_UPDATE_INTERVAL = 600  # Status update every 10 minutes
 
 # ============ MARKET HOLIDAYS ============
@@ -98,7 +98,8 @@ def run_script(script_name):
 
 def calculate_time_remaining(target_time):
     """Calculate seconds until target time"""
-    now = datetime.now().time()
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist).time()
     now_seconds = now.hour * 3600 + now.minute * 60 + now.second
     target_seconds = (
         target_time.hour * 3600 + target_time.minute * 60 + target_time.second
@@ -214,7 +215,7 @@ def main():
     position_check_counter = 0
 
     # Mark all past times as completed (skip them)
-    start_time = datetime.now().time()
+    start_time = datetime.now(ist).time()
 
     scanner_skipped = 0
     for scan_time in SCANNER_TIMES:
@@ -285,9 +286,22 @@ def main():
 
     print("Bot is now running. Press Ctrl+C to stop.\n")
 
+    last_loop_time = time.time()
+
     while True:
-        now = datetime.now().time()
+        now = datetime.now(ist).time()
         current_time = time.time()
+
+        # Sleep mode detection - check for large time gaps
+        time_since_last_loop = current_time - last_loop_time
+        if time_since_last_loop > 180:  # 3 minutes gap indicates sleep/freeze
+            minutes_gap = time_since_last_loop / 60
+            print(f"\n{'!'*60}")
+            print(f"[WARNING] {minutes_gap:.1f} minute gap detected!")
+            print(f"[WARNING] Laptop may have been in sleep mode")
+            print(f"[WARNING] Resumed at {datetime.now(ist).strftime('%H:%M:%S')}")
+            print(f"{'!'*60}\n")
+        last_loop_time = current_time
 
         # Check if market closed
         if now >= MARKET_CLOSE:
@@ -312,7 +326,7 @@ def main():
                 print(f"\n{'▓'*60}")
                 print(f"▓ SCANNER TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}")
                 print(f"{'▓'*60}\n")
-                
+
                 print(f"[SCANNER] Running reclaim scanner (1 min after candle close)...")
                 run_script("reclaim_scanner.py")
                 scanner_completed.add(scan_time)
@@ -331,86 +345,78 @@ def main():
                     )
 
         # Check for entry + order execution (XX:15)
-                for entry_time in ENTRY_ORDER_TIMES:
-                    if entry_time not in entry_order_completed and now >= entry_time:
-                        # Only trigger if within 60 seconds of scheduled time
-                        now_seconds = now.hour * 3600 + now.minute * 60 + now.second
-                        entry_seconds = entry_time.hour * 3600 + entry_time.minute * 60 + entry_time.second
-                        seconds_past = now_seconds - entry_seconds
-                        
-                        if seconds_past > 60:
-                            # Missed this entry time - mark as skipped
-                            print(f"[SKIPPED] Entry check {entry_time.strftime('%H:%M:%S')} - started {seconds_past}s late")
-                            entry_order_completed.add(entry_time)
-                            continue
-                        
-                        print(f"\n{'▓'*60}")
-                        print(
-                            f"▓ ENTRY CHECK TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}"
-                        )
-                        print(f"{'▓'*60}\n")
+        for entry_time in ENTRY_ORDER_TIMES:
+            if entry_time not in entry_order_completed and now >= entry_time:
+                # Only trigger if within 30 seconds of scheduled time (strict timing for entries)
+                now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+                entry_seconds = entry_time.hour * 3600 + entry_time.minute * 60 + entry_time.second
+                seconds_past = now_seconds - entry_seconds
 
-                        # Get positions count BEFORE running order manager
-                        positions_before = get_open_positions_count()
+                if seconds_past > 30:
+                    # Missed this entry time - mark as skipped
+                    print(f"[SKIPPED] Entry check {entry_time.strftime('%H:%M:%S')} - started {seconds_past}s late")
+                    entry_order_completed.add(entry_time)
+                    continue
 
-                        print(
-                            f"[ENTRY CHECK] Running entry checker (NIFTY filter + stock checks)..."
-                        )
-                        entry_start = time.time()
-                        entry_success = run_script("entry_checker.py")
-                        entry_duration = time.time() - entry_start
-                        print(f"[TIMING] Entry checker completed in {entry_duration:.2f}s")
+                # CRITICAL: Mark as completed IMMEDIATELY to prevent duplicate execution
+                # if exception/crash occurs during processing
+                entry_order_completed.add(entry_time)
 
-                        if entry_success:
-                            # Check if there are actually signals to process
-                            signals_file = ROOT / "main" / "entry_signals.json"
-                            has_signals = False
-                            num_signals = 0
-                            try:
-                                with open(signals_file) as f:
-                                    signals = json.load(f)
-                                    num_signals = len(signals)
-                                    has_signals = num_signals > 0
-                            except Exception as e:
-                                print(f"[WARNING] Could not read signals file: {e}")
-                            
-                            if has_signals:
-                                print(f"\n[ORDER MANAGER] Processing {num_signals} entry signal(s)...")
-                                order_start = time.time()
-                                run_script("order_manager.py")
-                                order_duration = time.time() - order_start
-                                print(f"[TIMING] Order manager completed in {order_duration:.2f}s")
-                                print(f"[TOTAL TIMING] End-to-end: {entry_duration + order_duration:.2f}s")
+                print(f"\n{'▓'*60}")
+                print(f"▓ ENTRY CHECK TRIGGERED @ {datetime.now().strftime('%H:%M:%S')}")
+                print(f"{'▓'*60}\n")
 
-                                # Count actual trades executed by comparing positions before/after
-                                positions_after = get_open_positions_count()
-                                new_trades = positions_after - positions_before
-                                
-                                if new_trades > 0:
-                                    executed_trades_count += new_trades
-                                    print(f"[TRADES] {new_trades} new position(s) opened this cycle")
-                                else:
-                                    print(f"[TRADES] No new positions opened this cycle")
-                            else:
-                                print(f"[ENTRY CHECK] No entry signals - skipping order manager")
-                            
-                            # Clear entry signals to prevent duplicates
-                            clear_entry_signals()
+                positions_before = get_open_positions_count()
 
-                        entry_order_completed.add(entry_time)
+                print(f"[ENTRY CHECK] Running entry checker (NIFTY filter + stock checks)...")
+                entry_start = time.time()
+                entry_success = run_script("entry_checker.py")
+                entry_duration = time.time() - entry_start
+                print(f"[TIMING] Entry checker completed in {entry_duration:.2f}s")
 
-                        # Find next entry
-                        next_entry = None
-                        for et in ENTRY_ORDER_TIMES:
-                            if et not in entry_order_completed:
-                                next_entry = et
-                                break
+                if entry_success:
+                    signals_file = ROOT / "main" / "entry_signals.json"
+                    has_signals = False
+                    num_signals = 0
+                    try:
+                        with open(signals_file) as f:
+                            signals = json.load(f)
+                            num_signals = len(signals)
+                            has_signals = num_signals > 0
+                    except Exception as e:
+                        print(f"[WARNING] Could not read signals file: {e}")
 
-                        if next_entry:
-                            remaining = calculate_time_remaining(next_entry)
-                            print(
-                                f"\n[NEXT ENTRY] {next_entry.strftime('%H:%M:%S')} (in {format_time_remaining(remaining)})\n"
-                            )
+                    if has_signals:
+                        print(f"\n[ORDER MANAGER] Processing {num_signals} entry signal(s)...")
+                        order_start = time.time()
+                        run_script("order_manager.py")
+                        order_duration = time.time() - order_start
+                        print(f"[TIMING] Order manager completed in {order_duration:.2f}s")
+                        print(f"[TOTAL TIMING] End-to-end: {entry_duration + order_duration:.2f}s")
+
+                        positions_after = get_open_positions_count()
+                        new_trades = positions_after - positions_before
+
+                        if new_trades > 0:
+                            executed_trades_count += new_trades
+                            print(f"[TRADES] {new_trades} new position(s) opened this cycle")
+                        else:
+                            print(f"[TRADES] No new positions opened this cycle")
+                    else:
+                        print(f"[ENTRY CHECK] No entry signals - skipping order manager")
+
+                    clear_entry_signals()
+
+                next_entry = None
+                for et in ENTRY_ORDER_TIMES:
+                    if et not in entry_order_completed:
+                        next_entry = et
+                        break
+
+                if next_entry:
+                    remaining = calculate_time_remaining(next_entry)
+                    print(f"\n[NEXT ENTRY] {next_entry.strftime('%H:%M:%S')} (in {format_time_remaining(remaining)})\n")
+
         # Monitor open positions (every 1 second)
         if current_time - last_position_check >= POSITION_CHECK_INTERVAL:
             try:

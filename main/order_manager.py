@@ -29,6 +29,7 @@ from kite_client import get_kite_client
 from risk_manager import can_open_new_trades
 from telegram_notifier import notify_order_placed, notify_order_skipped
 from log_manager import log_trade_entry, generate_trade_id
+from json_utils import atomic_json_write, safe_json_read
 
 
 # ============ CONFIG ============
@@ -44,21 +45,12 @@ TEST_MODE = False  # Set to False for live trading
 
 def load_entry_signals():
     """Load entry signals from entry_checker"""
-    if not SIGNALS_INPUT.exists():
-        print("[ERROR] Entry signals file not found")
-        return {}
-    
-    with open(SIGNALS_INPUT) as f:
-        return json.load(f)
+    return safe_json_read(SIGNALS_INPUT, default={})
 
 
 def load_open_positions():
     """Load current open positions to check for duplicates"""
-    if not POSITIONS_FILE.exists():
-        return {}
-    
-    with open(POSITIONS_FILE) as f:
-        return json.load(f)
+    return safe_json_read(POSITIONS_FILE, default={})
 
 
 def get_total_equity(kite):
@@ -180,53 +172,24 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
         
         # Wait for order to execute (market orders execute within seconds)
         time.sleep(2)
-        
-        # Verify order executed successfully
-        try:
-            order_history = kite.order_history(order_id)
-            final_status = order_history[-1]['status']
-            
-            # Check if order completed
-            if final_status == 'COMPLETE':
-                print(f"  ✅ Order EXECUTED")
-                print(f"  Trade ID: {trade_id}")
-                print(f"  Quantity: {quantity}")
-                print(f"  Entry: ₹{entry_price:.2f}")
-                print(f"  Stop Loss: ₹{stop_loss:.2f}")
-                print(f"  Target: ₹{target_price:.2f}")
-                
-                # Log trade entry (only if order completed)
-                log_trade_entry(
-                    trade_id=trade_id,
-                    symbol=symbol,
-                    entry_timestamp=entry_timestamp,
-                    entry_price=entry_price,
-                    stop_loss=stop_loss,
-                    target_price=target_price,
-                    quantity=quantity,
-                    entry_conditions=entry_conditions
-                )
-                
-                return order_id, trade_id
-                
-            elif final_status == 'REJECTED':
-                print(f"  ❌ Order REJECTED by exchange")
-                print(f"  Reason: {order_history[-1].get('status_message', 'Unknown')}")
-                return None, None
-                
-            else:
-                # Order pending/open - wait a bit more
-                print(f"  ⚠️  Order status: {final_status}")
-                print(f"  Waiting 3 more seconds...")
-                time.sleep(3)
-                
-                # Check again
+
+        # Verify order executed successfully (with retries)
+        verification_success = False
+        for verify_attempt in range(3):  # 3 verification attempts
+            try:
                 order_history = kite.order_history(order_id)
                 final_status = order_history[-1]['status']
-                
+
+                # Check if order completed
                 if final_status == 'COMPLETE':
-                    print(f"  ✅ Order EXECUTED (delayed)")
-                    
+                    print(f"  ✅ Order EXECUTED")
+                    print(f"  Trade ID: {trade_id}")
+                    print(f"  Quantity: {quantity}")
+                    print(f"  Entry: ₹{entry_price:.2f}")
+                    print(f"  Stop Loss: ₹{stop_loss:.2f}")
+                    print(f"  Target: ₹{target_price:.2f}")
+
+                    # Log trade entry (only if order completed)
                     log_trade_entry(
                         trade_id=trade_id,
                         symbol=symbol,
@@ -237,27 +200,42 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
                         quantity=quantity,
                         entry_conditions=entry_conditions
                     )
-                    
+
                     return order_id, trade_id
-                else:
-                    print(f"  ❌ Order failed to execute: {final_status}")
+
+                elif final_status == 'REJECTED':
+                    print(f"  ❌ Order REJECTED by exchange")
+                    print(f"  Reason: {order_history[-1].get('status_message', 'Unknown')}")
                     return None, None
-                    
-        except Exception as e:
-            print(f"  ⚠️  Could not verify order status: {e}")
-            print(f"  Proceeding with caution - manual verification recommended")
-            # If we can't verify, log anyway since order was accepted
-            log_trade_entry(
-                trade_id=trade_id,
-                symbol=symbol,
-                entry_timestamp=entry_timestamp,
-                entry_price=entry_price,
-                stop_loss=stop_loss,
-                target_price=target_price,
-                quantity=quantity,
-                entry_conditions=entry_conditions
-            )
-            return order_id, trade_id
+
+                else:
+                    # Order pending/open - wait before next check
+                    if verify_attempt < 2:
+                        print(f"  ⏳ Order status: {final_status}")
+                        print(f"  Verification attempt {verify_attempt + 1}/3 - waiting...")
+                        time.sleep(2)
+                    else:
+                        print(f"  ❌ Order verification timeout: status={final_status}")
+                        print(f"  ⚠️  MANUAL CHECK REQUIRED: Order ID {order_id}")
+                        return None, None
+
+                verification_success = True
+                break  # Exit verification loop if status check succeeded
+
+            except Exception as e:
+                if verify_attempt < 2:
+                    print(f"  ⚠️  Verification attempt {verify_attempt + 1}/3 failed: {e}")
+                    time.sleep(2)
+                else:
+                    # All verification attempts failed
+                    print(f"  ❌ All 3 verification attempts failed: {e}")
+                    print(f"  ⚠️  Order was SUBMITTED (ID: {order_id}) but status UNKNOWN")
+                    print(f"  ⚠️  MANUAL CHECK REQUIRED - Do NOT log this trade automatically")
+                    print(f"  ⚠️  Check Kite orderbook manually before proceeding")
+                    return None, None
+
+        # Should not reach here due to break/return above
+        return None, None
         
     except Exception as e:
         print(f"\n[ERROR] Failed to place BUY order for {symbol}: {e}")
@@ -266,17 +244,14 @@ def place_entry_order(kite, symbol, entry_price, stop_loss, quantity, entry_cond
 
 def add_to_positions_cache(symbol, trade_id, entry_price, stop_loss, quantity):
     """Add position to cache for monitoring"""
-    cache = {}
-    if POSITIONS_FILE.exists():
-        with open(POSITIONS_FILE) as f:
-            cache = json.load(f)
-    
+    cache = safe_json_read(POSITIONS_FILE, default={})
+
     # Calculate TP
     risk_per_share = entry_price - stop_loss
     target_price = entry_price + (TP_MULTIPLIER * risk_per_share)
-    
+
     ist = pytz.timezone('Asia/Kolkata')
-    
+
     cache[symbol] = {
         "trade_id": trade_id,
         "entry_price": entry_price,
@@ -285,11 +260,10 @@ def add_to_positions_cache(symbol, trade_id, entry_price, stop_loss, quantity):
         "quantity": quantity,
         "entry_timestamp": datetime.now(ist).isoformat()
     }
-    
-    POSITIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(POSITIONS_FILE, 'w') as f:
-        json.dump(cache, f, indent=2)
-    
+
+    # Atomic write to prevent corruption
+    atomic_json_write(POSITIONS_FILE, cache)
+
     print(f"[POSITION ADDED] {symbol} - Entry: ₹{entry_price:.2f}, SL: ₹{stop_loss:.2f}, TP: ₹{target_price:.2f}")
     
     # Send Telegram notification (for live mode - test mode sends in place_entry_order)
@@ -303,11 +277,19 @@ def process_entry_orders():
     Called by main.py after entry_checker runs
     """
     ist = pytz.timezone('Asia/Kolkata')
-    
+
     print(f"\n{'='*60}")
     print(f"[ORDER MANAGER] Processing Entry Orders")
     print(f"[TIME] {datetime.now(ist).strftime('%H:%M:%S')}")
     print(f"{'='*60}\n")
+
+    # TEST_MODE warning
+    if TEST_MODE:
+        print(f"\n{'!'*60}")
+        print(f"[WARNING] TEST_MODE is ENABLED")
+        print(f"[WARNING] Orders will be SIMULATED, not executed live")
+        print(f"[WARNING] Set TEST_MODE=False in order_manager.py for live trading")
+        print(f"{'!'*60}\n")
     
     # Check monthly DD cap
     allowed, current_r, msg = can_open_new_trades()

@@ -1,4 +1,3 @@
-#!/bin/zsh
-
-source "$HOME/Desktop/trading_bot/venv/bin/activate"
-python "$HOME/Desktop/trading_bot/main/main.py"
+  #!/bin/bash
+  cd /Users/walterwhite/Desktop/trading_bot
+  caffeinate -i python3 main/main.py

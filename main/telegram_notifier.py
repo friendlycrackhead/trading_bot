@@ -49,7 +49,7 @@ def send_telegram(message):
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=2)
         if response.status_code != 200:
             print(f"[TELEGRAM] Failed to send: {response.text}")
     except Exception as e:

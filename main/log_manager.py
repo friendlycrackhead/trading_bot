@@ -20,7 +20,8 @@ import pytz
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
-from kite_client import get_kite_client
+from kite_client import get_kite_client, kite_retry
+from json_utils import atomic_json_write, safe_json_read
 
 
 # ============ LOG PATHS (MONTHLY STRUCTURE) ============
@@ -50,26 +51,26 @@ def get_year_path(year=None):
 
 def get_current_equity():
     """
-    Fetch current equity from Kite API
+    Fetch current equity from Kite API with retry
     Returns: total_equity (margin + holdings value)
     """
     try:
         kite = get_kite_client()
-        
-        # Get available margin
-        margins = kite.margins("equity")
+
+        # Get available margin with retry
+        margins = kite_retry(kite.margins, "equity")
         available_margin = margins['available']['live_balance']
-        
-        # Get holdings value
-        holdings = kite.holdings()
+
+        # Get holdings value with retry
+        holdings = kite_retry(kite.holdings)
         holdings_value = sum(h['quantity'] * h['last_price'] for h in holdings)
-        
+
         total_equity = available_margin + holdings_value
-        
+
         return round(total_equity, 2)
-        
+
     except Exception as e:
-        print(f"[ERROR] Failed to fetch equity: {e}")
+        print(f"[ERROR] Failed to fetch equity after retries: {e}")
         return None
 
 
@@ -77,11 +78,7 @@ def get_current_equity():
 
 def load_cash_flows():
     """Load cash flows (withdrawals/deposits)"""
-    if not CASH_FLOWS_FILE.exists():
-        return []
-    
-    with open(CASH_FLOWS_FILE) as f:
-        return json.load(f)
+    return safe_json_read(CASH_FLOWS_FILE, default=[])
 
 
 def add_cash_flow(amount, flow_type, note=""):
@@ -107,13 +104,10 @@ def add_cash_flow(amount, flow_type, note=""):
     }
     
     cash_flows.append(entry)
-    
-    # Ensure directory exists
-    CASH_FLOWS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    
-    with open(CASH_FLOWS_FILE, 'w') as f:
-        json.dump(cash_flows, f, indent=2)
-    
+
+    # Atomic write
+    atomic_json_write(CASH_FLOWS_FILE, cash_flows)
+
     print(f"[CASH FLOW] {flow_type.title()}: ₹{amount:,.2f} - {note}")
     
     return entry
@@ -186,17 +180,13 @@ def log_trade_entry(trade_id, symbol, entry_timestamp, entry_price, stop_loss,
     }
     
     # Load existing
-    trades = []
-    if trades_file.exists():
-        with open(trades_file) as f:
-            trades = json.load(f)
-    
+    trades = safe_json_read(trades_file, default=[])
+
     # Add new
     trades.append(trade_record)
-    
-    # Save
-    with open(trades_file, 'w') as f:
-        json.dump(trades, f, indent=2)
+
+    # Save (atomic write)
+    atomic_json_write(trades_file, trades)
     
     print(f"[TRADE LOG] Entry recorded: {trade_id} → {month_path.name}/trades.json")
     print(f"[TRADE LOG] Equity before trade: ₹{equity_before:,.2f}" if equity_before else "[TRADE LOG] Equity: N/A")
@@ -218,33 +208,34 @@ def log_trade_exit(trade_id, symbol, exit_timestamp, exit_price, exit_reason, ba
     # Fetch current equity after exit
     equity_after = get_current_equity()
     
-    # Search for the trade - try current month first, then previous months
+    # Search for the trade - search ALL months (current year + previous year)
+    # This handles trades held for extended periods (e.g., entered in Dec, exited in Feb)
     months_to_search = []
-    
-    # Current month
-    current_month_path = get_monthly_path()
-    months_to_search.append(current_month_path)
-    
-    # Previous month (in case trade spans month boundary)
+
+    # Get all month directories from current and previous year
     now = datetime.now(ist)
-    if now.month == 1:
-        prev_month = date(now.year - 1, 12, 1)
-    else:
-        prev_month = date(now.year, now.month - 1, 1)
-    prev_month_path = get_monthly_path(datetime.combine(prev_month, datetime.min.time(), tzinfo=ist))
-    if prev_month_path.exists() and prev_month_path != current_month_path:
-        months_to_search.append(prev_month_path)
-    
+    current_year = now.year
+    years_to_search = [current_year, current_year - 1]
+
+    for year in years_to_search:
+        year_path = LOGS_ROOT / str(year)
+        if year_path.exists():
+            # Get all month directories in this year
+            month_dirs = sorted([d for d in year_path.iterdir() if d.is_dir()])
+            months_to_search.extend(month_dirs)
+
+    # Search most recent months first (reverse order)
+    months_to_search.reverse()
+
     # Search each month
     for month_path in months_to_search:
         trades_file = month_path / "trades.json"
         
         if not trades_file.exists():
             continue
-        
-        with open(trades_file) as f:
-            trades = json.load(f)
-        
+
+        trades = safe_json_read(trades_file, default=[])
+
         # Find the trade
         for trade in trades:
             if trade_id and trade.get("trade_id") == trade_id:
@@ -276,10 +267,9 @@ def log_trade_exit(trade_id, symbol, exit_timestamp, exit_price, exit_reason, ba
             trade["r_value"] = round(r_value, 2)
             trade["status"] = "CLOSED"
             trade["equity_after_trade"] = equity_after
-            
-            # Save updated trades
-            with open(trades_file, 'w') as f:
-                json.dump(trades, f, indent=2)
+
+            # Save updated trades (atomic write)
+            atomic_json_write(trades_file, trades)
             
             print(f"[TRADE LOG] Exit recorded: {symbol} - {r_value:.2f}R → {month_path.name}/trades.json")
             print(f"[TRADE LOG] Equity after trade: ₹{equity_after:,.2f}" if equity_after else "[TRADE LOG] Equity: N/A")
@@ -338,25 +328,23 @@ def update_trade_charges(trade_id, charges, month_path=None):
     if not trades_file.exists():
         print(f"[ERROR] No trades file found for {month_path.name}")
         return False
-    
-    with open(trades_file) as f:
-        trades = json.load(f)
-    
+
+    trades = safe_json_read(trades_file, default=[])
+
     # Find and update the trade
     trade_found = False
     for trade in trades:
         if trade.get("trade_id") == trade_id:
             trade_found = True
-            
+
             trade["charges"] = round(charges, 2)
-            
+
             # Calculate net P&L if pnl_total exists
             if trade.get("pnl_total") is not None:
                 trade["net_pnl"] = round(trade["pnl_total"] - charges, 2)
-            
-            # Save
-            with open(trades_file, 'w') as f:
-                json.dump(trades, f, indent=2)
+
+            # Save (atomic write)
+            atomic_json_write(trades_file, trades)
             
             print(f"[CHARGES] Updated {trade_id}")
             print(f"  Gross P&L: ₹{trade.get('pnl_total', 0):,.2f}")
@@ -428,9 +416,8 @@ def update_monthly_summary(month_path=None):
     
     if not trades_file.exists():
         return
-    
-    with open(trades_file) as f:
-        trades = json.load(f)
+
+    trades = safe_json_read(trades_file, default=[])
     
     # Filter closed and open trades
     closed_trades = [t for t in trades if t["status"] == "CLOSED"]
@@ -550,9 +537,9 @@ def update_monthly_summary(month_path=None):
         "adjusted_return_pct": round(adjusted_return_pct, 2) if adjusted_return_pct is not None else None,
         "updated": datetime.now(ist).isoformat()
     }
-    
-    with open(summary_file, 'w') as f:
-        json.dump(summary, f, indent=2)
+
+    # Atomic write
+    atomic_json_write(summary_file, summary)
     
     print(f"\n{'='*60}")
     print(f"📊 MONTHLY SUMMARY - {month_path.name}")
@@ -937,10 +924,9 @@ def generate_year_summary(year=None):
         "r_curve": r_curve
     }
     
-    # Save year summary
+    # Save year summary (atomic write)
     year_summary_file = year_path / f"year_{year}_summary.json"
-    with open(year_summary_file, 'w') as f:
-        json.dump(year_stats, f, indent=2)
+    atomic_json_write(year_summary_file, year_stats)
     
     print(f"\n{'='*60}")
     print(f"📊 YEAR SUMMARY - {year}")

@@ -20,8 +20,9 @@ import pytz
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
-from kite_client import get_kite_client
+from kite_client import get_kite_client, kite_retry
 from telegram_notifier import notify_reclaims_found
+from json_utils import atomic_json_write, safe_json_read
 
 
 # ============ CONFIG ============
@@ -172,15 +173,16 @@ def scan_stocks():
         
         try:
             time.sleep(0.35)  # Rate limit
-            
-            # Fetch hourly candles (includes today + history for volume SMA50)
-            all_candles = kite.historical_data(
+
+            # Fetch hourly candles (includes today + history for volume SMA50) with retry
+            all_candles = kite_retry(
+                kite.historical_data,
                 instrument_token=token,
                 from_date=from_date,
                 to_date=to_date,
                 interval="60minute"
             )
-            
+
             if len(all_candles) < 52:  # Need enough for SMA50 + current data
                 continue
             
@@ -222,8 +224,8 @@ def scan_stocks():
             
             # VALIDATION: Check candle freshness (should be recent)
             candle_age_minutes = (scan_date - check_candle['date']).total_seconds() / 60
-            
-            # Candle should be less than 90 minutes old (allows for some delay)
+
+            # Candle should be less than 120 minutes old (allows for delays/laptop sleep)
             if candle_age_minutes > 120:
                 print(f"[SKIP] {symbol} - Candle too old ({candle_age_minutes:.0f} min ago at {check_candle['date'].strftime('%H:%M')})")
                 continue
@@ -262,12 +264,10 @@ def scan_stocks():
 
 
 def save_watchlist(watchlist):
-    """Save watchlist to JSON"""
-    WATCHLIST_OUTPUT.parent.mkdir(exist_ok=True)
-    with open(WATCHLIST_OUTPUT, 'w') as f:
-        json.dump(watchlist, f, indent=2)
+    """Save watchlist to JSON (atomic write)"""
+    atomic_json_write(WATCHLIST_OUTPUT, watchlist)
     print(f"\n[SAVED] {len(watchlist)} stocks → {WATCHLIST_OUTPUT}")
-    
+
     # Send Telegram notification
     ist = pytz.timezone('Asia/Kolkata')
     stocks = list(watchlist.keys())

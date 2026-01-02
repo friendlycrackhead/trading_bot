@@ -19,8 +19,9 @@ import pytz
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(ROOT))
 
-from kite_client import get_kite_client
+from kite_client import get_kite_client, kite_retry
 from telegram_notifier import notify_entry_signals, notify_nifty_filter
+from json_utils import atomic_json_write, safe_json_read
 
 
 # ============ CONFIG ============
@@ -31,12 +32,7 @@ NIFTY_TOKEN = 256265  # NSE:NIFTY 50
 
 def load_watchlist():
     """Load reclaim watchlist"""
-    if not WATCHLIST_INPUT.exists():
-        print("[ERROR] Watchlist not found")
-        return {}
-    
-    with open(WATCHLIST_INPUT) as f:
-        return json.load(f)
+    return safe_json_read(WATCHLIST_INPUT, default={})
 
 
 def check_nifty_filter():
@@ -51,25 +47,29 @@ def check_nifty_filter():
     print(f"[STEP 1/2] Checking NIFTY Filter (Candle Close vs SMA50)...\n")
     
     try:
-        # Fetch NIFTY hourly candles
+        # Fetch NIFTY hourly candles with retry
         to_date = datetime.now(ist)
         from_date = to_date - timedelta(days=20)  # ~60 hourly candles
-        
-        candles = kite.historical_data(
+
+        candles = kite_retry(
+            kite.historical_data,
             instrument_token=NIFTY_TOKEN,
             from_date=from_date,
             to_date=to_date,
             interval="60minute"
         )
-        
+
         if len(candles) < 52:
             print(f"[ERROR] Insufficient NIFTY data: {len(candles)} candles")
             return False, None, None
-        
+
         # Get last completed candle's close
         last_candle_close = candles[-1]['close']
-        
+
         # Calculate SMA50 from 50 candles BEFORE the last candle
+        # IMPORTANT: Excludes the current forming candle (candles[-1])
+        # This is intentional - we don't want a candle that's only seconds old
+        # to affect the SMA calculation. We use only fully completed candles.
         sma50_candles = [c['close'] for c in candles[-51:-1]]
         
         if len(sma50_candles) < 50:
@@ -143,9 +143,9 @@ def check_entries():
     instruments = [f"NSE:{symbol}" for symbol in watchlist.keys()]
     
     try:
-        # Get live quotes for all watchlist stocks at once
-        quotes = kite.quote(instruments)
-        
+        # Get live quotes for all watchlist stocks at once with retry
+        quotes = kite_retry(kite.quote, instruments)
+
         for symbol, data in watchlist.items():
             instrument_key = f"NSE:{symbol}"
             
@@ -179,14 +179,12 @@ def check_entries():
 
 
 def save_signals(signals):
-    """Save entry signals to JSON"""
-    SIGNALS_OUTPUT.parent.mkdir(exist_ok=True)
-    with open(SIGNALS_OUTPUT, 'w') as f:
-        json.dump(signals, f, indent=2)
-    
+    """Save entry signals to JSON (atomic write)"""
+    atomic_json_write(SIGNALS_OUTPUT, signals)
+
     # Send Telegram notification
     notify_entry_signals(signals)
-    
+
     print(f"\n{'='*60}")
     print(f"[RESULT] {len(signals)} entry signals generated")
     print(f"[SAVED] → {SIGNALS_OUTPUT}")
