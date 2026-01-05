@@ -37,7 +37,7 @@ SIGNALS_INPUT = ROOT / "main" / "entry_signals.json"
 POSITIONS_FILE = ROOT / "main" / "open_positions.json"
 
 RISK_PERCENT = 0.01  # 1% risk per trade
-TP_MULTIPLIER = 3.0  # 3R target
+TP_MULTIPLIER = 2.5  # 2.5R target
 TEST_MODE = False  # Set to False for live trading
 
 
